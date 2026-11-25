@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.5.0';
+export const ENGINE_VERSION = '0.12.1';
 
 // ---------- species keys ----------
 export function binom(name) {
@@ -51,19 +51,26 @@ const TREE_LAYERS = { C: ['C'], S: ['S'], H: ['H'], U: ['S', 'H'] };
 // ---------- 1. likelihood ranking ----------
 // Bernoulli naive Bayes over each class's listed features, with background-relative scoring so that
 // classes with short species lists are not favoured. Unlisted plot species get a small probability.
-export const PARAMS = { eps: 0.03, absWeight: 0.5, temperature: 4, minFeatures: 1 };
+export const PARAMS = { eps: 0.03, epsProv: 0.03, absWeight: 0.5, temperature: 4, minFeatures: 1, coverW: 0.8 };
+// coverW: canopy trees are also scored on cover: each cover-rank step between the plot and the class's typical canopy
+// cover costs coverW (log units), so which conifer DOMINATES (black spruce vs tamarack vs cedar) counts, not just presence.
+// epsProv: penalty for a plot species a provisional profile (class without a DNR frequency table) does not list.
+// test/provisional.mjs: at 0.03 provisional classes win 0.2% of plots simulated from other classes and 98% of their own;
+// softer values (0.06-0.2) let them win 1-28% of other classes' plots, so they get the same treatment as the rest.
 
 export function classFeatures(profile) {
   const f = [];
   for (const [key, [freq]] of Object.entries(profile.g)) f.push({ key, p: freq / 100, layers: null });
   for (const [key, lays] of Object.entries(profile.t)) {
-    for (const [lay, [freq]] of Object.entries(lays)) f.push({ key, p: freq / 100, layers: TREE_LAYERS[lay] || ['S', 'H'] });
+    for (const [lay, [freq, cv]] of Object.entries(lays)) f.push({ key, p: freq / 100, layers: TREE_LAYERS[lay] || ['S', 'H'], canopyCover: lay === 'C' ? cv : null });
   }
   return f;
 }
 
-export function rankClasses(plot, data, candidates, params = PARAMS) {
+export function rankClasses(plot, data, candidates, params = PARAMS, priors = null) {
   const idx = plotIndex(plot);
+  const canopy = new Map();                                    // canopy cover rank by species key
+  for (const s of plot.species || []) if (s.n && s.layer === 'C' && s.cover) { const k = binom(s.n); canopy.set(k, Math.max(canopy.get(k) || 0, s.cover)); }
   const plotKeys = [...new Set((plot.species || []).filter(s => s.n).map(s => binom(s.n)))];
   const out = [];
   for (const code of candidates) {
@@ -74,18 +81,22 @@ export function rankClasses(plot, data, candidates, params = PARAMS) {
       const present = f.layers ? f.layers.some(L => hasAny(idx.byLayer[L], f.key)) || (hasAny(idx.any, f.key) && !Object.keys(prof.g).length)
                                : hasAny(idx.any, f.key);
       const p = Math.min(Math.max(f.p, 0.01), 0.99);
-      if (present) { ll += Math.log(p); f.key.split('|').forEach(k => explained.add(k.replace(/^g:/, ''))); if (p >= 0.5) hits.push(f); }
+      if (present) {
+        ll += Math.log(p); f.key.split('|').forEach(k => explained.add(k.replace(/^g:/, ''))); if (p >= 0.5) hits.push(f);
+        if (f.canopyCover && params.coverW) { const r = Math.max(...f.key.split('|').map(k => canopy.get(k) || 0)); if (r) ll -= params.coverW * Math.abs(r - f.canopyCover); }
+      }
       else { ll += params.absWeight * Math.log(1 - p); if (p >= 0.6) misses.push(f); }
     }
     for (const k of plotKeys) {
       const g = k.split(' ')[0];
-      if (!explained.has(k) && !explained.has(g)) ll += Math.log(params.eps);
+      if (!explained.has(k) && !explained.has(g)) ll += Math.log(prof.prov ? params.epsProv : params.eps);
     }
-    out.push({ code, ll, hits, misses, nFeat: feats.length });
+    out.push({ code, ll, hits, misses, nFeat: feats.length, prov: !!prof.prov, expert: prof.expert || null });
   }
   if (!out.length) return [];
-  const m = Math.max(...out.map(o => o.ll));
-  let z = 0; for (const o of out) { o.w = Math.exp((o.ll - m) / params.temperature); z += o.w; }
+  for (const o of out) { o.prior = priors?.[o.code] ?? 0; o.score = o.ll / params.temperature + o.prior; }
+  const m = Math.max(...out.map(o => o.score));
+  let z = 0; for (const o of out) { o.w = Math.exp(o.score - m); z += o.w; }
   for (const o of out) o.prob = o.w / z;
   return out.sort((a, b) => b.prob - a.prob);
 }
@@ -175,7 +186,7 @@ export const TYPE_W = {
   rangeIn: 0, rangeOcc: -0.6, rangeLikely: -0.5, rangeOut: -1.6, restrictedOut: -3,
   domStrongHigh: 1.5, domStrongLow: 0.7, domStrongAbsent: -1.0, domUsual: 0.5, domAssoc: 0.3, domOcc: 0.1,
   diffPlus: 1.0, diffPlusWeak: 0.4, diffMinus: -1.0,
-  coverYes: 1.2, coverNo: -1.2,
+  coverYes: 1.2, coverNo: -1.2, dotHere: 0.6, dotNear: 0.3,
   temperature: 1.3,
 };
 const COVER_TXT = ['', '<5%', '5–10%', '10–25%', '25–50%', '>50%'];
@@ -197,7 +208,7 @@ function presentIn(idx, keys, layer) {
 }
 const sectionIn = (sec, list) => (list || []).some(s => sec.split('/').includes(s));
 
-export function rankUnits(plot, units, section, W = TYPE_W) {
+export function rankUnits(plot, units, section, W = TYPE_W, ctx = null) {
   const idx = plotIndex(plot);
   idx.coverBy = (k, ls) => {                                          // highest cover rank of key k in the given layers
     let c = 0;
@@ -220,6 +231,12 @@ export function rankUnits(plot, units, section, W = TYPE_W) {
       else if (sectionIn(section, r.occasional)) { s += W.rangeOcc; ev.push({ v: W.rangeOcc, t: `occasional in ${section}` }); }
       else if (sectionIn(section, r.likely)) { s += W.rangeLikely; ev.push({ v: W.rangeLikely, t: `likely but undocumented in ${section}` }); }
       else if (r.documented?.length || r.occasional?.length) { s += W.rangeOut; ev.push({ v: W.rangeOut, t: `not documented in ${section} (${[...(r.documented || []), ...(r.occasional || [])].join(', ')})` }); }
+    }
+    // relevé dots of this type on the DNR distribution map, in this LTA (ctx: {lta, near, dist})
+    const tl = ctx?.dist?.[u.parent]?.t?.[u.code];
+    if (tl && ctx.lta) {
+      if (tl.includes(ctx.lta)) { s += W.dotHere; ev.push({ v: W.dotHere, t: 'DNR relevés of this type in this LTA' }); }
+      else if (ctx.near?.some(c => tl.includes(c))) { s += W.dotNear; ev.push({ v: W.dotNear, t: 'DNR relevés of this type in an adjacent LTA' }); }
     }
     // dominants
     for (const d of u.dom || []) for (const sp of d.sp) {
@@ -261,6 +278,65 @@ export function rankUnits(plot, units, section, W = TYPE_W) {
   return out.sort((a, b) => b.prob - a.prob);
 }
 const layerWord = L => ({ C: 'canopy', S: 'subcanopy', H: 'shrub layer', G: 'ground layer', U: 'understory' }[L] || 'any layer');
+
+// ---------- 5. DNR distribution maps: documented / possible LTAs ----------
+// dist[class] = {D: [lta codes], P: [lta codes], t: {typeCode: [lta codes with relevé dots]}} read from the fact-sheet maps.
+// Points near an LTA boundary take the best status among the LTAs within reach (map shading is generalized).
+export const DIST_W = { D: 0, R: 0, P: -0.7, Q: -0.7, N: -2.3 };          // log-prior added to the class score: possible ~1/2, not mapped ~1/10
+export function distStatus(cls, ltaCodes, dist) {
+  const d = dist?.[cls]; if (!d || !ltaCodes?.length) return null;
+  if (ltaCodes.some(c => d.D.includes(c))) return 'D';
+  // classes described without relevés (e.g. WFs55) have maps that show only 'possible' LTAs: there that is the range
+  if (!d.D.length && ltaCodes.some(c => d.P.includes(c))) return 'R';
+  if (ltaCodes.some(c => d.P.includes(c))) return 'P';
+  if (ltaCodes.some(c => d.Q?.includes(c))) return 'Q';      // DNR '?' : occurrence unknown / unconfirmed
+  if (ltaCodes.every(c => d.U?.includes(c))) return null;     // map unreadable here: no prior
+  return 'N';
+}
+export function distPriors(classes, ltaCodes, dist, W = DIST_W) {
+  const out = {};
+  for (const c of classes) { const st = distStatus(c, ltaCodes, dist); if (st) out[c] = W[st]; }
+  return out;
+}
+// LTAs within km of the point (for boundary tolerance)
+export function ltasNear(lat, lon, ecs, km = 1) {
+  const y = +lat, x = +lon; if (!ecs || !isFinite(x) || !isFinite(y)) return [];
+  const ky = 111.2, kx = 111.32 * Math.cos(y * Math.PI / 180), out = new Set();
+  for (const f of ecs.features) {
+    if (f.bbox && (x < f.bbox[0] - 0.03 || x > f.bbox[2] + 0.03 || y < f.bbox[1] - 0.02 || y > f.bbox[3] + 0.02)) continue;
+    if (f.polys.some(poly => inRing(x, y, poly[0]) && !poly.slice(1).some(h => inRing(x, y, h))) || nearestKm(x, y, f.polys.flat(), kx, ky, 0.03) <= km) out.add(f.ltaCode);
+  }
+  return [...out];
+}
+
+// ---------- 6. minerotrophic indicators (DNR bog-species list) ----------
+// Plot species not on the DNR "non-minerotrophic peatland species" list are minerotrophic indicators. The guides say they
+// are absent from bogs (APn80, APn90; a few transient individuals allowed) and present but limited in the poor conifer
+// swamp (APn81). Returns log-score adjustments for those classes; thresholds are in MINERO_W.
+export const MINERO_W = { bogFree: 1, bogEach: -1.0, bogCap: -5, poorFree: 4, poorEach: -0.6, poorCap: -4 };
+export function minerotrophic(plot, data) {
+  const bog = new Set(data.bogList || []), seen = new Map();
+  for (const s of plot.species || []) {
+    if (!s.n) continue; const k = binom(s.n); if (bog.has(k)) continue;
+    seen.set(k, Math.max(seen.get(k) || 0, s.cover || 0));
+  }
+  const all = new Set((plot.species || []).filter(s => s.n).map(s => binom(s.n)));
+  return { n: seen.size, total: all.size, species: [...seen.keys()] };
+}
+export function mineroAdjust(classes, m, W = MINERO_W) {
+  const out = {};
+  for (const c of classes) {
+    if (c === 'APn80' || c === 'APn90') out[c] = Math.max(W.bogCap, W.bogEach * Math.max(0, m.n - W.bogFree));
+    else if (c === 'APn81') out[c] = Math.max(W.poorCap, W.poorEach * Math.max(0, m.n - W.poorFree));
+  }
+  return out;
+}
+// how much missing species should count: a short list is probably incomplete, so absences weigh less until ~25 species
+export function completeness(plot, mode = 'auto') {
+  if (mode === 'complete') return 1;
+  const n = new Set((plot.species || []).filter(s => s.n).map(s => binom(s.n))).size;
+  return mode === 'partial' ? Math.min(0.5, n / 25) : Math.min(1, n / 25);
+}
 
 // ---------- which keys apply ----------
 // class keys in a section whose results include the class

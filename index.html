@@ -82,6 +82,9 @@ dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--c
 dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); }
 .saved { display: grid; grid-template-columns: 1fr auto; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .desc { font-size: 14px; }
+.pal { font-size: 14px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.pal:last-child { border-bottom: 0; }
+#palette details { margin-top: 8px; }
 details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 4px; }
 details .desc { color: var(--ink); margin: 6px 0; }
 </style>
