@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NPC Field Key</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="theme-color" content="#2f5233">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<style>
+:root {
+  --bg: #f6f5f1; --card: #ffffff; --ink: #1d2a1f; --quiet: #5b6b5e; --line: #d9ddd5;
+  --accent: #2f5233; --accent-ink: #ffffff; --soft: #e6efe3; --warn: #8a5a00; --warn-bg: #fbf1dc;
+  --bad: #8f2d2d; --bad-bg: #f8e3e1; --good: #2f6b35; --bar: #6f9a68; --chip: #eef1eb; --head: #2f5233; --head-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #141a15; --card: #1d251e; --ink: #e8eee6; --quiet: #a3b3a5; --line: #334035;
+    --accent: #8cc084; --accent-ink: #0f1a10; --soft: #263427; --warn: #f0c36a; --warn-bg: #3a3020;
+    --bad: #f0a39b; --bad-bg: #3d2523; --good: #9bd49a; --bar: #8cc084; --chip: #263027; --head: #1f3322; --head-ink: #e8eee6; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #141a15; --card: #1d251e; --ink: #e8eee6; --quiet: #a3b3a5; --line: #334035;
+    --accent: #8cc084; --accent-ink: #0f1a10; --soft: #263427; --warn: #f0c36a; --warn-bg: #3a3020;
+    --bad: #f0a39b; --bad-bg: #3d2523; --good: #9bd49a; --bar: #8cc084; --chip: #263027; --head: #1f3322; --head-ink: #e8eee6; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--head); color: var(--head-ink); padding: 10px max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--head); }
+header h1 { font-size: 17px; margin: 0 0 6px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+header h1 small { font-weight: 400; opacity: .85; font-size: 12px; }
+nav { display: flex; overflow-x: auto; gap: 2px; scrollbar-width: none; }
+nav button { flex: 0 0 auto; background: none; border: 0; color: inherit; opacity: .75; padding: 9px 11px 11px; font: inherit; font-size: 14px; border-bottom: 3px solid transparent; }
+nav button.on { opacity: 1; border-bottom-color: var(--head-ink); font-weight: 600; }
+nav .n { font-size: 11px; background: var(--soft); color: var(--ink); border-radius: 9px; padding: 0 6px; margin-left: 4px; }
+main { padding-block: 14px 110px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 760px; margin: 0 auto; }
+section.tab { display: none; } section.tab.on { display: block; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.card h3 { font-size: 14px; margin: 12px 0 6px; }
+label { display: block; font-size: 13px; color: var(--quiet); margin: 10px 0 4px; }
+input, select, textarea { width: 100%; font: inherit; font-size: 16px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+textarea { min-height: 70px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+button.btn { font: inherit; font-size: 15px; padding: 11px 14px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+button.btn.ghost { background: transparent; color: var(--accent); }
+button.btn.danger { background: transparent; border-color: var(--bad); color: var(--bad); }
+.muted { color: var(--quiet); font-size: 13px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button { font: inherit; font-size: 14px; padding: 8px 12px; border-radius: 18px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.search { position: relative; }
+.results { border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; max-height: 330px; overflow-y: auto; background: var(--card); }
+.results div { padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.results div:last-child { border-bottom: 0; }
+.results i { color: var(--quiet); font-size: 13px; }
+.sp { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: center; }
+.sp:last-child { border-bottom: 0; }
+.sp .nm { font-size: 15px; } .sp .nm i { display: block; font-size: 13px; color: var(--quiet); }
+.cov { display: flex; gap: 4px; grid-column: 1 / -1; }
+.cov button { flex: 1; font: inherit; font-size: 12px; padding: 7px 2px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.cov button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.x { background: none; border: 0; color: var(--quiet); font-size: 20px; padding: 0 6px; }
+.rank { display: grid; grid-template-columns: 62px 1fr 56px; gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.rank:last-child { border-bottom: 0; }
+.rank .code { font-weight: 700; } .rank .pct { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.bar { grid-column: 2 / 3; height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--bar); }
+.why { grid-column: 1 / -1; font-size: 13px; color: var(--quiet); }
+.badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--soft); color: var(--ink); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); } .badge.bad { background: var(--bad-bg); color: var(--bad); } .badge.good { color: var(--good); }
+.verdict { font-size: 18px; font-weight: 700; margin: 2px 0 4px; }
+.step { border-left: 3px solid var(--line); padding: 4px 0 4px 10px; margin: 8px 0; font-size: 14px; }
+.step.chosen { border-left-color: var(--accent); }
+.step b { font-size: 13px; }
+.choice { display: grid; gap: 8px; margin-top: 6px; }
+.choice button { text-align: left; font: inherit; font-size: 14px; padding: 10px; border-radius: 8px; border: 1px solid var(--accent); background: var(--card); color: var(--ink); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+.kv b { font-variant-numeric: tabular-nums; }
+.foot { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line); padding: 10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 8px; justify-content: space-between; align-items: center; z-index: 6; }
+.foot .muted { flex: 1; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); max-width: 420px; width: calc(100% - 32px); }
+dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); }
+.saved { display: grid; grid-template-columns: 1fr auto; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.desc { font-size: 14px; }
+details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 4px; }
+details .desc { color: var(--ink); margin: 6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>NPC Field Key</span><small id="savedState">Saved</small></h1>
+  <nav id="tabs"></nav>
+</header>
+<main id="main"></main>
+<div class="foot">
+  <span class="muted" id="footInfo"></span>
+  <button class="btn danger" id="resetBtn">Reset plot</button>
+</div>
+<dialog id="dlg"><form method="dialog"><h3 id="dlgTitle" style="margin-top:0"></h3><p id="dlgBody" class="muted"></p>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost" value="cancel">Cancel</button><button class="btn" id="dlgOk" value="ok">OK</button></div></form></dialog>
+<script type="module" src="app.js"></script>
+</body>
+</html>
