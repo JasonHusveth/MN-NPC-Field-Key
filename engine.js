@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.4.1';
+export const ENGINE_VERSION = '0.5.0';
 
 // ---------- species keys ----------
 export function binom(name) {
@@ -304,13 +304,19 @@ export function ecsLookup(lat, lon, ecs) {
   const y = +lat, x = +lon;
   if (!ecs || !isFinite(x) || !isFinite(y) || !y || !x) return null;
   const ky = 111.2, kx = 111.32 * Math.cos(y * Math.PI / 180);
-  const strip = f => { const { polys, ...rest } = f; return rest; };
-  for (const f of ecs.features) for (const poly of f.polys) {
-    if (!inRing(x, y, poly[0]) || poly.slice(1).some(h => inRing(x, y, h))) continue;
-    return { ...strip(f), edgeKm: nearestKm(x, y, ecs.lines || [], kx, ky) };   // distance to nearest subsection-to-subsection boundary
+  const strip = f => { const { polys, bbox, ...rest } = f; return rest; };
+  const L = ecs.lines || [], ltaLines = L.map(l => l.c), subLines = L.filter(l => l.l === 2).map(l => l.c);
+  const edges = () => ({ edgeKm: nearestKm(x, y, subLines, kx, ky), ltaEdgeKm: nearestKm(x, y, ltaLines, kx, ky, 0.15) });
+  const inBox = (f, pad = 0) => !f.bbox || (x >= f.bbox[0] - pad && x <= f.bbox[2] + pad && y >= f.bbox[1] - pad && y <= f.bbox[3] + pad);
+  for (const f of ecs.features) {
+    if (!inBox(f)) continue;
+    for (const poly of f.polys) {
+      if (!inRing(x, y, poly[0]) || poly.slice(1).some(h => inRing(x, y, h))) continue;
+      return { ...strip(f), ...edges() };       // edgeKm: nearest subsection boundary; ltaEdgeKm: nearest LTA boundary
+    }
   }
-  // just outside the mapped area (shoreline, state line, simplified edge): take the nearest subsection within 3 km
+  // just outside the mapped area (shoreline, state line, simplified edge): take the nearest unit within 3 km
   let best = null;
-  for (const f of ecs.features) { const d = nearestKm(x, y, f.polys.flat(), kx, ky, 0.05); if (d < 3 && (!best || d < best.d)) best = { f, d }; }
-  return best ? { ...strip(best.f), edgeKm: nearestKm(x, y, ecs.lines || [], kx, ky), offMapKm: best.d } : { outside: true };
+  for (const f of ecs.features) { if (!inBox(f, 0.05)) continue; const d = nearestKm(x, y, f.polys.flat(), kx, ky, 0.05); if (d < 3 && (!best || d < best.d)) best = { f, d }; }
+  return best ? { ...strip(best.f), ...edges(), offMapKm: best.d } : { outside: true };
 }

@@ -69,14 +69,16 @@ function ecsLine() {
   if (!r) return '<p class="muted">Coordinates not readable as decimal degrees.</p>';
   if (r.outside) return '<p><span class="badge warn">Outside Minnesota ECS map</span> Check the coordinates; choose the section by hand.</p>';
   const off = r.offMapKm ? ` <span class="badge warn">point is ${r.offMapKm.toFixed(1)} km off the mapped edge; nearest subsection used</span>` : '';
+  const ltaNear = r.ltaEdgeKm < 0.5 ? ` <span class="badge warn">${r.ltaEdgeKm < 0.1 ? '<0.1' : r.ltaEdgeKm.toFixed(1)} km from an LTA boundary</span>` : '';
   const near = r.edgeKm < 2 ? ` <span class="badge warn">${r.edgeKm < 0.1 ? '<0.1' : r.edgeKm.toFixed(1)} km from a subsection boundary: confirm on the ground</span>` : '';
   const mismatch = p.section && p.section !== r.sec ? `<p><span class="badge bad">Section chosen is ${esc(p.section)}, but the point is in ${esc(r.sec)}</span> <button class="btn ghost" id="useEcs">Use ${esc(r.sec)}</button></p>` : '';
-  return `<p><b>ECS:</b> ${esc(r.prov)} · Section ${esc(r.sec)} (${esc(r.secCode)} ${esc(r.secName)}) · Subsection ${esc(r.sub)} (${esc(r.subCode)})${near}${off}</p>${mismatch}`;
+  return `<div class="kv" style="margin:6px 0"><span>Province</span><b>${esc(r.prov)}</b><span>Section</span><b>${esc(r.sec)} · ${esc(r.secName)} (${esc(r.secCode)})</b>
+    <span>Subsection</span><b>${esc(r.sub)} (${esc(r.subCode)})${near}</b><span>LTA</span><b>${esc(r.lta || '—')}${r.ltaCode ? ` (${esc(r.ltaCode)})` : ''}${ltaNear}</b></div>${off ? `<p>${off}</p>` : ''}${mismatch}`;
 }
 function applyEcs(force) {                     // fill section/subsection from coordinates; never overrides a hand-picked section unless asked
   const r = ECS && ecsLookup(S.plot.lat, S.plot.lon, ECS);
-  if (!r || r.outside) { S.plot.subsection = ''; return; }
-  S.plot.subsection = `${r.sub} (${r.subCode})`;
+  if (!r || r.outside) { S.plot.subsection = ''; S.plot.lta = ''; return; }
+  S.plot.subsection = `${r.sub} (${r.subCode})`; S.plot.lta = r.lta ? `${r.lta} (${r.ltaCode})` : '';
   if (force || !S.plot.section || S.plot.sectionAuto) { S.plot.section = r.sec; S.plot.sectionAuto = true; }
 }
 const field = (path, label, attrs = '') => { const v = path.split('.').reduce((o, k) => o?.[k], S.plot); return `<label>${label}</label><input data-f="${path}" value="${esc(v)}" ${attrs}>`; };
@@ -303,9 +305,9 @@ function savedTab() {
     <p><button class="btn ghost" id="exportCsv">Export CSV</button> <button class="btn ghost" id="exportJson">Export JSON (backup)</button></p><div id="exportBox"></div></div></section>`;
 }
 function exportCsv() {
-  const rows = [['plot_id', 'date', 'observer', 'section', 'subsection', 'lat', 'lon', 'layer', 'scientific_name', 'common_name', 'cover_rank', 'cover_class', 'top_class', 'top_prob', 'mean_c', 'fqi']];
+  const rows = [['plot_id', 'date', 'observer', 'section', 'subsection', 'lta', 'lat', 'lon', 'layer', 'scientific_name', 'common_name', 'cover_rank', 'cover_class', 'top_class', 'top_prob', 'mean_c', 'fqi']];
   const byName = new Map(D.species.map(s => [s.n, s]));
-  for (const p of S.saved) for (const s of p.species) rows.push([p.id, p.date, p.observer, p.section, p.subsection || '', p.lat, p.lon, s.layer, s.n, byName.get(s.n)?.c || '', s.cover, COVER[s.cover - 1],
+  for (const p of S.saved) for (const s of p.species) rows.push([p.id, p.date, p.observer, p.section, p.subsection || '', p.lta || '', p.lat, p.lon, s.layer, s.n, byName.get(s.n)?.c || '', s.cover, COVER[s.cover - 1],
     p.result?.[0]?.code || '', p.result?.[0]?.prob ?? '', p.fqi?.meanC?.toFixed?.(2) ?? '', p.fqi?.fqi?.toFixed?.(1) ?? '']);
   download(`npc-plots-${today()}.csv`, rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
 }
