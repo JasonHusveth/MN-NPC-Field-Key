@@ -1,4 +1,4 @@
-import { rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, ENGINE_VERSION } from './engine.js';
+import { rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
 
 // ---------------------------------------------------------------- storage (IndexedDB, saved on every change)
 const DB = 'npc-field-key', STORE = 'kv';
@@ -11,7 +11,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 let ECS = null, DIST = null, _ctx = { key: null, v: null };
 const blankPlot = settings => ({ id: '', date: today(), observer: settings.observer || '', section: '', lat: '', lon: '', acc: '', county: '', muni: '', trs: '', plotSize: '20 x 20 m (400 m²)', notes: '',
   land: { upland: '', wooded: '', landform: '', slope: '', aspect: '', flooding: '', texture: '', drainage: '', organic: '', ph: '', water: '', notes: '' },
-  species: [], layerCover: { C: '', S: '', H: '', G: '' }, keyChoices: {} });
+  species: [], layerCover: { C: '', S: '', H: '', G: '' }, keyChoices: {}, sysTicks: {}, system: null });
 let S = { settings: { observer: 'Husveth, Jason J.', minFQI: 10, flagBelow: 20 }, plot: null, saved: [], tab: 'site' };
 let D = null;            // data bundle
 let saveTimer = null;
@@ -29,7 +29,8 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const COVER = ['<5%', '5–10', '10–25', '25–50', '>50%'];
 const LAYERS = [['C', 'Canopy', '>10 m'], ['S', 'Subcanopy', '2–10 m'], ['H', 'Shrub layer', '<2 m, woody'], ['G', 'Ground layer', 'forbs, graminoids, ferns']];
-const TABS = [['site', 'Site'], ['land', 'Landscape'], ['C', 'Canopy'], ['S', 'Subcanopy'], ['H', 'Shrub'], ['G', 'Ground'], ['results', 'Results'], ['saved', 'Saved']];
+// tabs follow the DNR keying order: 1 section (Site) · 2 system group (Key 1) · plants · 3 system (System) · 4 class & type (Results)
+const TABS = [['site', '1 Site'], ['land', '2 Key 1'], ['C', 'Canopy'], ['S', 'Subcanopy'], ['H', 'Shrub'], ['G', 'Ground'], ['system', '3 System'], ['results', '4 Class'], ['saved', 'Saved']];
 const comm = code => D.communities.find(c => c.code === code);
 function ask(title, body, okText = 'OK') {
   const d = $('#dlg'); $('#dlgTitle').textContent = title; $('#dlgBody').textContent = body; $('#dlgOk').textContent = okText;
@@ -55,7 +56,7 @@ function renderTabs() {
 function render() {
   renderTabs();
   const m = $('#main');
-  m.innerHTML = S.tab === 'site' ? siteTab() : S.tab === 'land' ? landTab() : S.tab === 'results' ? resultsTab() : S.tab === 'saved' ? savedTab() : layerTab(S.tab);
+  m.innerHTML = S.tab === 'site' ? siteTab() : S.tab === 'land' ? landTab() : S.tab === 'system' ? systemTab() : S.tab === 'results' ? resultsTab() : S.tab === 'saved' ? savedTab() : layerTab(S.tab);
   if (LAYERS.some(([l]) => l === S.tab)) { const q = $('#q'); if (q && lastQuery.layer === S.tab) { q.value = lastQuery.text; showMatches(); } }
 }
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (!b) return; S.tab = b.dataset.tab; save(); render(); window.scrollTo(0, 0); });
@@ -153,6 +154,10 @@ function paletteClasses() {                      // every class in the section (
   const { upland, wooded } = S.plot.land;
   return sec.classes.filter(code => { const g = GROUP(code); return (!upland || g.startsWith(upland)) && (!wooded || g.endsWith(wooded)); });
 }
+function paletteSystems() {
+  const ss = S.plot.section ? sysState() : null; if (!ss?.panel) return '';
+  return `<p class="muted" style="margin:6px 0">DNR system key ${esc(ss.panel.id)}: ${ss.chosen ? `<b>${esc(ss.chosen.system)}</b> chosen; species lists draw on its classes only.` : ss.scored.map(x => `${esc(x.system)} ${pct(x.p)}%`).join(' · ') + '. Species lists are weighted by these.'}</p>`;
+}
 function paletteCard() {
   const p = S.plot;
   if (!p.section) return '<div class="card" id="palette"><h2>Possible NPCs here</h2><p class="muted">Set the section (GPS or by hand) to see the classes that apply.</p></div>';
@@ -163,10 +168,11 @@ function paletteCard() {
   const block = (k, title, open = true) => groups[k].length ? `<details ${open ? 'open' : ''}><summary><b>${title}</b> (${groups[k].length})</summary>${groups[k].map(item).join('')}</details>` : '';
   const narrowed = p.land.upland || p.land.wooded ? ` · ${[p.land.upland, p.land.wooded].filter(Boolean).join(', ')} only` : '';
   return `<div class="card" id="palette"><h2>Possible NPCs here <span class="muted">${cls.length} classes in ${esc(p.section)}${narrowed}</span></h2>
+    ${paletteSystems()}
     ${ctx ? `<p class="muted">From the DNR fact-sheet distribution maps for ${esc(ctx.ltaName)} (${esc(ctx.lta)}). Unlikely classes stay listed and can still win on the plants.</p>
       ${block('D', 'Documented in this LTA')}${block('Dn', 'Documented in an adjacent LTA (within 1 km)')}${block('R', 'In the DNR mapped range (classes mapped without plot data)')}${block('P', 'Possible in this LTA')}${block('Q', 'Occurrence unknown in this LTA (DNR “?”)')}${block('N', 'Not mapped in this LTA', false)}${block('', 'No distribution map', false)}`
     : `<p class="muted">${!p.lat ? 'Add coordinates (GPS) to sort these by the DNR distribution maps.' : 'Loading distribution maps…'}</p>${block('', 'All classes in this section', false)}`}
-    <p class="muted">Answer upland/wetland and wooded/open on the Landscape tab to narrow the list.</p></div>`;
+    <p class="muted">Answer wooded/open and upland/wetland on the Key 1 tab to narrow the list.</p></div>`;
 }
 function refreshPalette() { const el = $('#palette'); if (el) el.outerHTML = paletteCard(); }
 function ecsLine() {
@@ -209,12 +215,16 @@ function siteTab() {
 function landTab() {
   const L = S.plot.land;
   const seg = (key, opts) => `<div class="seg" data-seg="${key}">${opts.map(([v, t]) => `<button data-v="${v}" class="${L[key] === v ? 'on' : ''}">${t}</button>`).join('')}</div>`;
-  return `<section class="tab on"><div class="card"><h2>System group (Key 1)</h2>
+  const cc = +(S.plot.layerCover?.C || 0), canopyHint = cc ? (cc >= 4 ? 'Your canopy layer cover (>25%) suggests WOODED.' : 'Your canopy layer cover (<25%) suggests OPEN, unless the ground layer is mostly shade-tolerant species.') : '';
+  const L1 = groupLetter(L.upland, L.wooded);
+  return `<section class="tab on"><div class="card"><h2>Step 2 · System group (DNR Key 1)</h2>
+    <label>Wooded or open</label>${seg('wooded', [['wooded', 'Wooded (tree cover >25%)'], ['open', 'Open (tree cover <25%)'], ['', 'Not sure']])}
+    <p class="muted">DNR: 25% tree cover is a rough starting point. The most important feature is whether the abundant ground-layer plants are sun-requiring or shade-tolerant, especially where the canopy was recently reduced by logging, wind or fire. ${canopyHint}</p>
     <label>Upland or wetland</label>${seg('upland', [['upland', 'Upland'], ['wetland', 'Wetland'], ['', 'Not sure']])}
-    <label>Wooded or open</label>${seg('wooded', [['wooded', 'Wooded (tree cover >25%)'], ['open', 'Open'], ['', 'Not sure']])}
-    <p class="muted">Answers here narrow the candidates. Leave "Not sure" to score every class in the section.</p></div>
+    <p class="muted">DNR: upland soils are saturated only briefly in spring or after heavy rain and very rarely have standing water. Wetlands have persistently saturated soils, standing water through the growing season or for long periods, or annual flooding. If unsure, work through the likely choices on the System tab.</p>
+    ${L1 ? `<p><span class="badge good">System group ${L1}</span> ${esc(systemPanel(S.plot.section, L1, D)?.title || '')}${S.plot.section ? '' : ' (choose the section on the Site tab)'}</p>` : '<p><span class="badge warn">Answer both</span> to choose the DNR system key.</p>'}</div>
     ${paletteCard()}
-    <div class="card"><h2>Landscape & soils</h2>
+    <div class="card"><h2>Landscape & soils <span class="muted">recorded with the plot; the DNR's own soil, landform and field statements are judged on the System tab</span></h2>
     ${sel('land.landform', 'Landform', ['Moraine / till plain', 'Outwash / sand plain', 'Lake plain', 'Floodplain / terrace', 'Stream valley / ravine', 'Bluff / steep slope', 'Bedrock outcrop / cliff', 'Talus', 'Lakeshore / beach', 'Peatland (basin)', 'Peatland (water track)', 'Depression / basin', 'Seepage slope', 'Dune / beach ridge'])}
     <div class="row"><div>${field('land.slope', 'Slope (%)', 'inputmode="decimal"')}</div><div>${sel('land.aspect', 'Aspect', ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'Level'])}</div></div>
     ${sel('land.flooding', 'Flooding', ['None', 'Occasional', 'Annual / frequent', 'Seasonally saturated', 'Permanently saturated', 'Standing water'])}
@@ -233,7 +243,11 @@ $('#main').addEventListener('input', e => {
 $('#main').addEventListener('click', async e => {
   const t = e.target;
   const segb = t.closest('[data-seg] button');
-  if (segb) { S.plot.land[segb.parentElement.dataset.seg] = segb.dataset.v; save(); render(); return; }
+  if (segb) { S.plot.land[segb.parentElement.dataset.seg] = segb.dataset.v; const L1 = groupLetter(S.plot.land.upland, S.plot.land.wooded);
+    if (S.plot.system && S.plot.system.letter !== L1) S.plot.system = null; save(); render(); return; }
+  const tk = t.closest('[data-tick]'); if (tk) { const [id, v] = tk.dataset.tick.split('§§'); S.plot.sysTicks[id] = S.plot.sysTicks[id] === v ? '' : v; save(); render(); return; }
+  const us = t.closest('[data-usesys]'); if (us) { const L1 = groupLetter(S.plot.land.upland, S.plot.land.wooded); S.plot.system = us.dataset.usesys ? { letter: L1, name: us.dataset.usesys } : null; S.viewClass = ''; save(); render(); return; }
+  const tw = t.closest('[data-flip]'); if (tw) { const [kid, at, lead] = tw.dataset.flip.split('§'); (S.plot.keyChoices[kid] ||= {})[at] = lead; save(); render(); return; }
   if (t.id === 'placeLookup') { placeLookup(false); return; }
   if (t.id === 'useEcs') { applyEcs(true); save(); render(); renderTabs(); return; }
   if (t.id === 'gps') {
@@ -255,7 +269,7 @@ $('#main').addEventListener('click', async e => {
   if (t.id === 'copyExport') { const ta = $('#exportText'); navigator.clipboard.writeText(ta.value).then(() => { $('#copyMsg').textContent = 'Copied.'; }).catch(() => { ta.select(); $('#copyMsg').textContent = 'Text selected; copy it with your device.'; }); return; }
   if (t.id === 'exportCsv') { exportCsv(); return; }
   if (t.id === 'exportJson') { download(`npc-plots-${today()}.json`, JSON.stringify(S.saved, null, 1), 'application/json'); return; }
-  const load = t.closest('[data-load]'); if (load) { if (await ask('Open saved plot?', 'This replaces the plot on screen. The plot on screen is not lost if it has been saved.', 'Open')) { S.plot = JSON.parse(JSON.stringify(S.saved[+load.dataset.load])); S.plot.layerCover ||= { C: '', S: '', H: '', G: '' }; S.viewClass = ''; S.tab = 'site'; save(); render(); } return; }
+  const load = t.closest('[data-load]'); if (load) { if (await ask('Open saved plot?', 'This replaces the plot on screen. The plot on screen is not lost if it has been saved.', 'Open')) { S.plot = JSON.parse(JSON.stringify(S.saved[+load.dataset.load])); S.plot.layerCover ||= { C: '', S: '', H: '', G: '' }; S.plot.sysTicks ||= {}; S.plot.system ??= null; S.viewClass = ''; S.tab = 'site'; save(); render(); } return; }
   const rm = t.closest('[data-rm]'); if (rm) { if (await ask('Delete saved plot?', S.saved[+rm.dataset.rm].id || 'Unnamed plot', 'Delete')) { S.saved.splice(+rm.dataset.rm, 1); save(); render(); } return; }
 });
 
@@ -285,9 +299,12 @@ function keyName(key) {
 }
 function likelySpecies(layer, n = 20) {
   const p = S.plot; if (!p.section) return [];
-  const cls = paletteClasses().filter(c => D.profiles[c]); if (!cls.length) return [];
+  let cls = paletteClasses().filter(c => D.profiles[c]); if (!cls.length) return [];
   const ctx = locCtx(); let w = {};
-  if (p.species.length >= 3) for (const r of rankPlot(p, cls, ctx)) w[r.code] = r.prob;
+  // with a DNR system key in play, weigh classes the DNR way: system probability (or the chosen system) x class probability within it
+  const cw = classWeights(p, sysState(p), cls);
+  if (cw && Object.keys(cw).length) { w = cw; cls = Object.keys(cw); }
+  else if (p.species.length >= 3) for (const r of rankPlot(p, cls, ctx)) w[r.code] = r.prob;
   else for (const c of cls) { const st = classStatus(c, ctx); w[c] = Math.exp(st ? PRIOR[st] : 0); }
   const z = Object.values(w).reduce((a, b) => a + b, 0) || 1;
   const score = new Map();
@@ -353,22 +370,98 @@ function candidates() {
   if (upland || wooded) c = c.filter(code => { const g = GROUP(code); return (!upland || g.startsWith(upland)) && (!wooded || g.endsWith(wooded)); });
   return c;
 }
+// ---------------------------------------------------------------- step 3: DNR system key
+function sysState(p = S.plot) {
+  const letter = groupLetter(p.land.upland, p.land.wooded);
+  const panel = p.section ? systemPanel(p.section, letter, D) : null;
+  // system probability = DNR indicator plants + site statements (the key panel) + the guide's appendix table of system frequencies
+  const sp = panel ? systemProbs(p, panel, D, p.sysTicks) : null;
+  const scored = sp ? sp.scored : [];
+  // class-table support (share of the whole-section probability ranking held by each system's classes): shown for comparison only
+  const rk = panel && p.species.length >= 3 ? rankPlot(p, candidatesFor(p.section, D)) : [];
+  for (const x of scored) { const cl = systemClasses(p.section, x.col, D); x.support = rk.length ? rk.filter(r => cl.includes(r.code)).reduce((a, r) => a + r.prob, 0) : null; }
+  const close = scored.length > 1 && scored[0].p < 0.6;
+  const freqTop = scored.reduce((a, x) => (x.support || 0) > (a?.support || 0) ? x : a, null);
+  const freqDisagree = freqTop && freqTop !== scored[0] && freqTop.support >= 0.6 ? freqTop : null;
+  const noInd = scored.length && scored.every(x => x.indScore === 0 && !x.appHits.length);
+  const chosen = panel && p.system && p.system.letter === letter ? scored.find(x => x.system === p.system.name) : null;
+  return { letter, panel, scored, appendix: sp?.appendix || null, chosen, close, noInd, freqDisagree, best: scored[0] || null, current: chosen || scored[0] || null };
+}
+// class weights when the systems are weighed first (DNR order): P(class) = P(system) x P(class | system).
+// Once a system is chosen it gets all the weight. Before 3 species, P(class | system) comes from the distribution maps only.
+function classWeights(p = S.plot, ss = sysState(p), cands = candidates()) {
+  const ctx = locCtx(), out = {};
+  if (!ss.panel) return null;
+  for (const x of ss.scored) {
+    const ps = ss.chosen ? (ss.chosen === x ? 1 : 0) : x.p; if (!ps) continue;
+    const cl = systemClasses(p.section, x.col, D).filter(c => cands.includes(c) && D.profiles[c]); if (!cl.length) continue;
+    let w = {};
+    if (p.species.length >= 3) for (const r of rankPlot(p, cl, ctx)) w[r.code] = r.prob;
+    else { for (const c of cl) { const st = ctx && classStatus(c, ctx); w[c] = Math.exp(st ? PRIOR[st] : 0); } const z = Object.values(w).reduce((a, b) => a + b, 0) || 1; for (const c in w) w[c] /= z; }
+    for (const [c, v] of Object.entries(w)) out[c] = (out[c] || 0) + ps * v;
+  }
+  return out;
+}
+const pct = v => v < 0.01 ? '<1' : Math.round(v * 100);
+function systemTab() {
+  const p = S.plot;
+  if (!p.section) return `<section class="tab on"><div class="card"><h2>Step 3 · Ecological system</h2><p>Choose the section on the Site tab first.</p></div></section>`;
+  const st = sysState();
+  if (!st.panel) return `<section class="tab on"><div class="card"><h2>Step 3 · Ecological system</h2><p>Answer <b>wooded/open</b> and <b>upland/wetland</b> on the Key 1 tab: they decide which DNR system key applies.</p>
+    <p class="muted">DNR: if it is not clear, work through the most likely choices (try each answer on Key 1 and compare here).</p></div></section>`;
+  const sec = p.section;
+  const cols = st.scored.map(x => {
+    const isChosen = st.chosen && st.chosen.system === x.system, isBest = st.best === x;
+    const stmts = STMT_KINDS.flatMap(kind => (x.col[kind] || []).map((t, i) => ({ kind, t, id: stmtId(st.panel.id, kind, t) })));
+    const sup = x.support, ap = st.appendix;
+    return `<div class="card" style="${isChosen ? 'border-color:var(--accent);border-width:2px' : ''}">
+      <h2>${esc(x.system)} <span class="pct" style="float:right">${pct(x.p)}%</span> ${isChosen ? '<span class="badge good">chosen</span>' : isBest && !st.chosen ? '<span class="badge">most probable</span>' : ''}</h2>
+      <div class="bar"><span style="width:${Math.max(1, x.p * 100)}%"></span></div>
+      <div class="kv" style="margin-top:8px"><span>DNR indicator plants</span><b>${x.nPresent} of ${x.ind.length} present${x.ind.length ? ` · score ${x.indScore.toFixed(1)}` : ''}</b>
+        <span>Site statements</span><b>${x.fit} fit · ${x.not} don't fit</b>
+        <span>${ap ? `Appendix ${esc(ap.id.split('-')[1])}` : 'Appendix'}</span><b>${!ap ? 'no appendix table for this key' : !x.appCovered ? `not in ${esc(ap.book)} Appendix ${esc(ap.id.split('-')[1])}` : x.pApp === null ? '–' : `${pct(x.pApp)}%${x.appHits.length ? ` <span class="muted" style="font-weight:400">· ${x.appHits.slice().sort((a, b) => b.f - a.f).slice(0, 6).map(h => `${esc(h.c)} ${h.f}%`).join(', ')}${x.appHits.length > 6 ? '…' : ''}</span>` : ''}`}</b>
+        ${sup !== null ? `<span class="muted">Class tables</span><span class="muted">${pct(sup)}% of the class ranking (for comparison; not added in)</span>` : ''}</div>
+      ${x.ind.length ? `<h3>Indicator plants <span class="muted">abundance counts as well as presence</span></h3><div>${x.ind.map(i => `<span class="badge ${i.present ? 'good' : ''}" style="margin:2px">${i.present ? '✓ ' : ''}${esc(i.c)}${i.l ? ` (${esc(i.l)})` : ''}${i.q ? ` ${esc(i.q)}` : ''}${i.present && i.cover ? ` · ${COVER[i.cover - 1]}` : ''}</span>`).join('')}</div>` : ''}
+      ${stmts.length ? `<h3>Landform, soils & field characteristics <span class="muted">tap ✓ fits / ✗ doesn't fit</span></h3>
+        ${stmts.map(m => { const v = p.sysTicks[m.id] || ''; return `<div class="sp" style="grid-template-columns:1fr auto"><div class="nm" style="font-size:14px"><span class="muted">${m.kind}:</span> ${esc(m.t)}</div>
+          <div class="seg"><button data-tick="${m.id}§§y" class="${v === 'y' ? 'on' : ''}">✓</button><button data-tick="${m.id}§§n" class="${v === 'n' ? 'on' : ''}">✗</button></div></div>`; }).join('')}` : ''}
+      <p style="margin-top:10px">${isChosen ? `<button class="btn ghost" data-usesys="">Undo choice</button>` : `<button class="btn" data-usesys="${esc(x.system)}">Use ${esc(x.system)}</button>`}
+        <span class="muted">→ ${esc(columnKey(sec, x.col, D) || (x.col.goto || ''))}</span></p></div>`;
+  }).join('');
+  return `<section class="tab on"><div class="card"><h2>Step 3 · Ecological system <span class="muted">DNR key ${esc(st.panel.id)}: ${esc(st.panel.title)} · ${esc(st.panel.book || '')} p. ${(st.panel.pages || []).join('–')}</span></h2>
+    <p class="muted">DNR: compare the lists of indicator plants with the plants on the site, considering their abundance as well as presence; one list should best apply. Use the landform, soil and field characteristics to confirm. Disregard species in atypical microhabitats (e.g. wetland plants in a small pool in an upland forest).</p>
+    <p class="muted">The percentages weigh three things: the panel's indicator plants and their cover, the statements you mark (each ✓ or ✗ counts strongly), and ${st.appendix ? `${esc(st.appendix.book)} Appendix ${esc(st.appendix.id.split('-')[1])} (p. ${st.appendix.pages[0]}–${st.appendix.pages.at(-1)}), the guide's table of how often each differentiating species occurs in each system` : 'no appendix (none covers this key)'}. Your list has ${new Set(p.species.map(x => x.n)).size} different species${p.listMode === 'complete' ? ' (complete relevé)' : ''}; mosses are not scored.</p>
+    ${st.chosen ? `<p><span class="badge good">Chosen: ${esc(st.chosen.system)}</span> The Class tab runs this system's class key.</p>` : `<p><span class="badge warn">Not chosen yet</span> Most probable: <b>${esc(st.best.system)}</b> (${pct(st.best.p)}%). Confirm with the statements below and tap Use.</p>`}
+    ${!st.chosen && st.noInd ? `<p><span class="badge warn">No indicator plants recorded</span> None of the panel's indicator species or appendix species are on your list. Let the site statements decide.</p>` : !st.chosen && st.close ? `<p><span class="badge warn">Close call</span> No system reaches 60%${st.scored[1].support > st.scored[0].support ? `, and the class tables favour <b>${esc(st.scored[1].system)}</b>` : ''}. DNR: try the likely choices and let the site statements decide.</p>` : ''}
+    ${!st.chosen && !st.noInd && !st.close && st.freqDisagree ? `<p><span class="badge warn">Check</span> The system evidence points to <b>${esc(st.best.system)}</b>, but the class tables put ${pct(st.freqDisagree.support)}% on <b>${esc(st.freqDisagree.system)}</b>. Weigh the site statements for both.</p>` : ''}
+    ${st.letter === 'B' || st.letter === 'D' ? '<p class="muted">DNR note: sparsely wooded Acid Peatlands and Forested Rich Peatlands can be keyed with either the wetland forest (B) or wetland open (D) keys.</p>' : ''}</div>${cols}</section>`;
+}
 function resultsTab() {
   const p = S.plot;
   if (!p.section) return `<section class="tab on"><div class="card"><h2>Results</h2><p>Choose the ecological section on the Site tab first; it decides which keys and classes apply.</p></div></section>`;
   if (p.species.length < 3) return `<section class="tab on"><div class="card"><h2>Results</h2><p>Add at least a few species to score the plot.</p></div></section>`;
   const sec = D.sections.find(s => s.code === p.section);
-  const cands = candidates();
+  const ss = sysState();
+  if (!ss.panel) return `<section class="tab on"><div class="card"><h2>Step 4 · Class</h2><p>Follow the DNR order first: answer Key 1 (wooded/open, upland/wetland), then choose the system on the System tab.</p></div></section>`;
+  const sysCol = ss.current.col, sysName = ss.current.system, confirmed = !!ss.chosen;
+  const inSys = systemClasses(p.section, sysCol, D);
+  const allC = candidates();
+  const cands = allC.filter(c => inSys.includes(c));
   const ctx = locCtx();
-  const ranked = rankPlot(p, cands, ctx);
+  const ranked = rankPlot(p, cands.length ? cands : allC, ctx);
+  // other systems' classes, weighed the DNR way (system probability x class probability within the system)
+  const cw = classWeights(p, { ...ss, chosen: null }, allC) || {};
+  const outside = Object.entries(cw).filter(([c]) => !inSys.includes(c)).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([code, prob]) => ({ code, prob }));
   const top = ranked[0];
-  // key run for the top-ranked class (and the runner-up when it uses a different key)
-  const keyIds = [...new Set(ranked.slice(0, 4).flatMap(r => keysForClass(p.section, r.code, D).slice(0, 1)))].slice(0, 3);
+  // DNR step 4: the chosen system's class key
+  const sysKey = columnKey(p.section, sysCol, D);
+  const keyIds = sysKey ? [sysKey] : [];
   const runs = keyIds.map(id => ({ id, key: D.classKeys[p.section][id], run: runClassKey(p, D.classKeys[p.section][id], 'a', p.keyChoices[id] || {}) }));
   // headline key: one whose result agrees with the top-ranked class, else the first key that finished
   const keyed = runs.find(r => r.run.result && top && r.run.result.startsWith(top.code)) || runs.find(r => r.run.result);
   const defaults = r => r.run.path.filter(st => st.auto && st.evidence === 0 && st.leads.length > 1).length;
-  const keyList = runs.length > 1 ? `<p class="muted" style="margin-top:6px"><b>All DNR keys run:</b> ${runs.map(r => `${esc(r.id)} ${esc(r.key.title || '')} → <b>${esc(r.run.result || (r.run.stop === 'choose' ? 'needs your choice' : 'stopped'))}</b>${defaults(r) ? ` <span class="badge warn">${defaults(r)} couplet${defaults(r) > 1 ? 's' : ''} by default</span>` : ''}`).join(' · ')}</p>` : '';
+  const sysLine = `<p class="muted" style="margin-top:6px">System: <b>${esc(sysName)}</b> ${confirmed ? '(chosen on the System tab)' : `<span class="badge warn">not confirmed</span> most probable at ${pct(ss.current.p)}%${ss.close ? ' (close call)' : ''}${ss.freqDisagree ? `; the class tables favour ${esc(ss.freqDisagree.system)}` : ''}; confirm it on the System tab`}${!sysKey && sysCol.goto ? ` · ${esc(sysCol.goto)}` : ''}</p>`;
+  const keyList = sysLine + (runs.length > 1 ? `<p class="muted" style="margin-top:6px"><b>All DNR keys run:</b> ${runs.map(r => `${esc(r.id)} ${esc(r.key.title || '')} → <b>${esc(r.run.result || (r.run.stop === 'choose' ? 'needs your choice' : 'stopped'))}</b>${defaults(r) ? ` <span class="badge warn">${defaults(r)} couplet${defaults(r) > 1 ? 's' : ''} by default</span>` : ''}`).join(' · ')}</p>` : '');
   const agree = keyed && top && keyed.run.result.startsWith(top.code);
   const notesHtml = fieldNotes(p, ranked, runs.map(r => r.run.result?.slice(0, 5)).filter(Boolean)).map(nt => `<div class="step chosen" style="margin-top:10px"><b>Field note (${esc(nt.author)})</b><br>${esc(nt.text)}</div>`).join('');
   const fq = floristicQuality(p, D, sec.prov, { minFQI: S.settings.minFQI, flagBelow: S.settings.flagBelow });
@@ -379,9 +472,10 @@ function resultsTab() {
     <div class="verdict">${esc(keyed.run.result)} ${name(keyed.run.result.slice(0, 5))}</div>
     <p>${agree ? `<span class="badge good">Key and probabilities agree</span> The probability ranking puts ${esc(top.code)} first at ${Math.round(top.prob * 100)}%.`
       : `<span class="badge warn">Key and probabilities disagree</span> The key gives ${esc(keyed.run.result)}; the probability ranking puts ${esc(top.code)} first (${Math.round(top.prob * 100)}%). Check the fact sheets for both.`}</p>${keyList}${notesHtml}</div>`;
+  else if (!sysKey && (sysCol.classes || []).length === 1) head = `<div class="card"><h2>Summary</h2><div class="verdict">${esc(sysCol.classes[0])} ${name(sysCol.classes[0].slice(0, 5))}</div><p>The only class of this system in ${esc(p.section)}.</p>${keyList}${notesHtml}</div>`;
   else if (top) head = `<div class="card"><h2>Summary</h2><div class="verdict">${esc(top.code)} ${name(top.code)}</div><p>Most probable class at ${Math.round(top.prob * 100)}%. ${runs.some(r => r.run.stop === 'choose') ? 'The key needs your answer below to finish.' : ''}</p>${keyList}${notesHtml}</div>`;
   // probability ranking
-  const rank = `<div class="card"><h2>Probability ranking <span class="muted">${cands.length} classes in ${esc(p.section)}${ranked.some(r => r.prov) ? ', some provisional' : ''}</span></h2>
+  const rank = `<div class="card"><h2>Probability ranking <span class="muted">${ranked.length} classes of the ${esc(sysName)} system in ${esc(p.section)}${ranked.some(r => r.prov) ? ', some provisional' : ''}</span></h2>
     ${ranked.slice(0, 8).map(r => `<div class="rank"><span class="code">${r.code}</span><span>${name(r.code)}${ctx && classStatus(r.code, ctx) ? ` <span class="badge ${{ D: 'good', Dn: 'good', R: 'good', P: '', Q: '', N: 'warn' }[classStatus(r.code, ctx)]}">${STATUS_TXT[classStatus(r.code, ctx)]}</span>` : ''}</span>${r.expert ? ' <span class="badge">field-based profile (J. Husveth); no DNR frequency table</span>' : r.prov ? ' <span class="badge warn">provisional: no DNR frequency table</span>' : ''}<span class="pct">${r.prob < 0.01 ? '<1' : Math.round(r.prob * 100)}%</span>
       <div class="bar"><span style="width:${Math.max(1, r.prob * 100)}%"></span></div>
       <div class="why">${r.hits.length ? 'Found: ' + feats(r.hits, 6) : ''}${r.misses.length ? `<br>Expected, not recorded: ${feats(r.misses, 5)}` : ''}</div></div>`).join('')}
@@ -389,11 +483,13 @@ function resultsTab() {
       return peat ? `<p class="muted"><b>Minerotrophic indicators:</b> ${m.n} of ${m.total} species are not on the DNR bog-species list${m.n ? ` (${m.species.slice(0, 8).map(k => esc(keyName(k)?.c || k)).join(', ')}${m.n > 8 ? '…' : ''})` : ''}. Bogs (APn80, APn90) are marked down for more than ${1} and the poor conifer swamp (APn81) for more than 4.</p>` : ''; })()}
     <div class="row" style="align-items:center"><label style="margin:0">Species list</label><div class="seg" data-listmode>${[['auto', 'Auto'], ['partial', 'Partial'], ['complete', 'Complete relevé']].map(([v, t]) => `<button data-lm="${v}" class="${(p.listMode || 'auto') === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>
     <p class="muted">Missing species count ${Math.round(completeness(p, p.listMode || 'auto') * 100)}% as much as in a complete relevé (Auto scales with the number of species entered, full weight at 25).</p>
+    ${outside.length ? `<details><summary>Classes outside this system that also score well (${outside.map(r => esc(r.code)).join(', ')})</summary>${outside.map(r => `<div class="pal"><b>${esc(r.code)}</b> ${name(r.code)} <span class="muted">· ${pct(r.prob)}% overall (its system's probability × its share within the system)</span></div>`).join('')}<p class="muted">If one of these fits better, revisit Key 1 or the System tab.</p></details>` : ''}
     <p class="muted">Classes marked provisional have no DNR frequency table; their profile is estimated from the fact-sheet description, indicator tables and the probability key. Cliffs, talus and shores are reached by the key only.${ctx ? ` Ranking includes the DNR distribution maps for ${esc(ctx.ltaName)}: classes possible here count about half, classes not mapped here about a tenth, before the plants are weighed.` : ''}</p></div>`;
   // keys
   const keys = runs.map(({ id, key, run }) => `<div class="card"><h2>DNR key ${esc(id)} <span class="muted">${esc(key.title || '')} · ${key.book} p. ${key.pages.join(', ')}</span></h2>
     ${run.path.map(st => `<div class="step chosen"><b>Couplet ${esc(st.at)}</b> · score ${st.sum}${st.scored.length ? ` (${st.scored.map(x => `${esc(x.c)} ${x.v > 0 ? '+' : ''}${x.v}`).join(', ')})` : ''}<br>
        ${st.chosen ? `→ ${esc(st.chosen)}: ${esc(trim(st.leads.find(l => l.id === st.chosen)?.text, 160))} ${p.keyChoices[id]?.[st.at] ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" data-unchoose="${id}§${st.at}">undo</button>` : ''}` : ''}
+       ${st.chosen && st.auto && st.evidence > 0 && st.leads.length > 1 && Math.abs(st.sum - st.thr) <= 2 ? `<div><span class="badge warn">Close call (score ${st.sum}, threshold ${st.thr})</span> DNR: when the sum is near zero, follow the other path too and read the couplet text. ${st.leads.filter(l => l.id !== st.chosen).map(l => `<button class="btn ghost" style="padding:2px 8px;font-size:12px" data-flip="${id}§${st.at}§${l.id}">Try ${esc(l.id)}${l.res ? ' → ' + esc(l.res) : ''}</button>`).join(' ')}</div>` : ''}
        ${st.chosen && st.auto && st.evidence === 0 && st.leads.length > 1 ? `<div><span class="badge warn">No key species recorded at this couplet</span> The book's rule defaults to ${esc(st.chosen)}. Confirm by description:</div>
          <div class="choice">${st.leads.map(l => `<button data-choose="${id}§${st.at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(trim(l.text, 220))}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}</div>`).join('')}
     ${run.stop === 'choose' ? `<p><b>This couplet is not scored; choose the description that fits:</b></p><div class="choice">${run.path.at(-1).leads.map(l => `<button data-choose="${id}§${run.path.at(-1).at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}
@@ -406,6 +502,15 @@ function resultsTab() {
     return `<div class="card"><h2>DNR probability key ${esc(k.id)} <span class="muted">${k.book} p. ${k.page}</span></h2>
       ${r.ranked.map(([c, v]) => `<div class="rank"><span class="code">${c}</span><span>${name(c)}</span><span class="pct">${v} pts</span><div class="bar"><span style="width:${100 * v / tot}%"></span></div></div>`).join('')}
       <p class="muted">${r.used.length} of the key's ${k.rows.length} species recorded. Highest score is the most probable class (the DNR reports 70–80% accuracy).</p></div>`; }).join('');
+  // DNR fact-sheet indicator tables for similar classes (EBF and PPATP fact sheets): shown when both classes of a pair are in contention
+  const contend = [...new Set([...ranked.slice(0, 3).map(r => r.code), ...keyRes, ...outside.slice(0, 2).map(r => r.code)])];
+  const idxP = new Set(p.species.map(x => binom(x.n)));
+  const has = k => k.split('|').some(x => idxP.has(x) || (x.startsWith('g:') && [...idxP].some(y => y.startsWith(x.slice(2) + ' '))));
+  const pairs = (D.simInd || []).filter(t => contend.includes(t.a) && contend.includes(t.b)).slice(0, 3);
+  const simCard = pairs.length ? `<div class="card"><h2>Similar classes: DNR indicator species</h2>${pairs.map(t => {
+    const side = c => { const rows = t.rows.filter(r => r.for === c), hit = rows.filter(r => has(r.k)); if (!rows.length) return '';
+      return `<div style="margin:6px 0"><b>${esc(c)}</b> ${name(c)} indicators: <b>${hit.length} of ${rows.length}</b> recorded${hit.length ? ` <span class="muted">(${hit.map(r => esc(r.c)).join(', ')})</span>` : ''}</div>`; };
+    return `<div class="step"><b>${esc(t.a)} vs ${esc(t.b)}</b>${side(t.a)}${side(t.b)}<p class="muted">Fact sheet ${esc(t.pages.join(', '))}. </p></div>`; }).join('')}<p class="muted">The DNR lists these species on the fact sheets as the ones that separate each pair. Their frequencies are already in the class ranking, so this card is for checking, not extra weight.</p></div>` : '';
   // types and subtypes within a class (keyed class first, then the top of the probability ranking)
   const clsOpts = [...new Set([keyed?.run.result?.slice(0, 5), ...ranked.slice(0, 3).map(r => r.code)].filter(c => c && D.types?.[c]))];
   const cls = clsOpts.includes(S.viewClass) ? S.viewClass : clsOpts[0] || (keyed?.run.result || top?.code || '').slice(0, 5);
@@ -415,7 +520,7 @@ function resultsTab() {
     <div class="kv"><span>Species (N)</span><b>${fq.N}</b><span>Mean C</span><b>${fq.meanC === null ? '–' : fq.meanC.toFixed(2)}${fq.status === 'not-reported' ? ' <span class="badge warn">provisional</span>' : ''}</b>
     <span>FQI</span><b>${fq.status === 'not-reported' ? `not reported (fewer than ${S.settings.minFQI} species)` : fq.fqi.toFixed(1)}${fq.status === 'low-count' ? ' <span class="badge warn">low species count</span>' : ''}</b></div>
     ${fq.unassigned.length ? `<p class="muted">No C value in MNTaxa for: ${fq.unassigned.map(esc).join(', ')} (left out).</p>` : ''}</div>`;
-  return `<section class="tab on">${head}${rank}${keys}${pk}${typesCard}${fqCard}
+  return `<section class="tab on">${head}${rank}${keys}${pk}${simCard}${typesCard}${fqCard}
     <div class="card"><button class="btn" id="savePlot">Save plot to list</button> <span class="muted">Engine ${ENGINE_VERSION} · data ${esc(D.version)}</span></div></section>`;
 }
 function typeCard(cls, opts, p) {
@@ -462,9 +567,16 @@ function label(key) {
 // ---------------------------------------------------------------- saved plots & export
 function savePlot() {
   const sec = D.sections.find(s => s.code === S.plot.section);
-  const cands = S.plot.section ? candidates() : [];
-  const ranked = S.plot.section ? rankPlot(S.plot, cands) : [];
+  let cands = S.plot.section ? candidates() : [];
+  const ss = S.plot.section ? sysState() : {};
+  if (ss.current) { const inSys = systemClasses(S.plot.section, ss.current.col, D), c2 = cands.filter(c => inSys.includes(c)); if (c2.length) cands = c2; }
+  const ranked = S.plot.section ? rankPlot(S.plot, cands, locCtx()) : [];
   const rec = JSON.parse(JSON.stringify(S.plot));
+  if (ss.current) {
+    rec.systemName = ss.current.system; rec.systemConfirmed = !!ss.chosen;
+    const kid = columnKey(S.plot.section, ss.current.col, D), k = kid && D.classKeys[S.plot.section]?.[kid];
+    if (k) { const run = runClassKey(S.plot, k, 'a', S.plot.keyChoices[kid] || {}); rec.keyResult = run.result || ''; }
+  }
   rec.savedAt = new Date().toISOString();
   rec.result = ranked.slice(0, 3).map(r => ({ code: r.code, prob: +r.prob.toFixed(3) }));
   if (sec) rec.fqi = floristicQuality(S.plot, D, sec.prov, S.settings);
@@ -479,9 +591,9 @@ function savedTab() {
     <p><button class="btn ghost" id="exportCsv">Export CSV</button> <button class="btn ghost" id="exportJson">Export JSON (backup)</button></p><div id="exportBox"></div></div></section>`;
 }
 function exportCsv() {
-  const rows = [['plot_id', 'date', 'observer', 'county', 'city_township', 'trs_qq', 'section', 'subsection', 'lta', 'lat', 'lon', 'layer', 'scientific_name', 'common_name', 'cover_rank', 'cover_class', 'top_class', 'top_prob', 'mean_c', 'fqi']];
+  const rows = [['plot_id', 'date', 'observer', 'county', 'city_township', 'trs_qq', 'section', 'subsection', 'lta', 'lat', 'lon', 'layer', 'scientific_name', 'common_name', 'cover_rank', 'cover_class', 'system', 'system_confirmed', 'key_result', 'top_class', 'top_prob', 'mean_c', 'fqi']];
   const byName = new Map(D.species.map(s => [s.n, s]));
-  for (const p of S.saved) for (const s of p.species) rows.push([p.id, p.date, p.observer, p.county || '', p.muni || '', p.trs || '', p.section, p.subsection || '', p.lta || '', p.lat, p.lon, s.layer, s.n, byName.get(s.n)?.c || '', s.cover, COVER[s.cover - 1],
+  for (const p of S.saved) for (const s of p.species) rows.push([p.id, p.date, p.observer, p.county || '', p.muni || '', p.trs || '', p.section, p.subsection || '', p.lta || '', p.lat, p.lon, s.layer, s.n, byName.get(s.n)?.c || '', s.cover, COVER[s.cover - 1], p.systemName || '', p.systemName ? (p.systemConfirmed ? 'yes' : 'no') : '', p.keyResult || '',
     p.result?.[0]?.code || '', p.result?.[0]?.prob ?? '', p.fqi?.meanC?.toFixed?.(2) ?? '', p.fqi?.fqi?.toFixed?.(1) ?? '']);
   download(`npc-plots-${today()}.csv`, rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
 }
@@ -521,6 +633,7 @@ function examplePlot(settings) {
   if (!S.plot) { S.plot = examplePlot(S.settings); S.tab = 'results'; }
   S.plot.layerCover ||= { C: '', S: '', H: '', G: '' };                       // plots saved by v0.1
   S.plot.muni ??= ''; S.plot.trs ??= '';                                       // plots saved before v0.6
+  S.plot.sysTicks ||= {}; S.plot.system ??= null;                              // plots saved before v0.13
   D = await fetch('data/npc-data.json').then(r => r.json());
   fetch('data/ecs.json').then(r => r.json()).then(e => { ECS = e; const b = $('#ecsBox'); if (b) b.innerHTML = ecsLine(); refreshPalette(); }).catch(() => {});
   fetch('data/dist.json').then(r => r.json()).then(d => { DIST = d; refreshPalette(); }).catch(() => {});

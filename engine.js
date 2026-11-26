@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.12.1';
+export const ENGINE_VERSION = '0.14.0';
 
 // ---------- species keys ----------
 export function binom(name) {
@@ -124,13 +124,14 @@ export function runClassKey(plot, key, startLead = 'a', choices = {}) {
       if (present && typeof s.v === 'number') { sum += s.v; scored.push({ lead: L.id, c: s.c, s: s.s, v: s.v }); }
     }
     let chosen = null;
+    const thr = pair.map(L => L.val).find(v => typeof v === 'number') ?? 0;
     if (choices[cur]) chosen = byId[choices[cur]];
     else {
       const ruled = pair.filter(L => L.op && L.val !== null && L.val !== undefined);
       if (ruled.length) chosen = ruled.find(L => OPS[L.op](sum, L.val)) || null;
       else if (pair.length === 1) chosen = pair[0];
     }
-    path.push({ at: cur, sum, scored, evidence: scored.length, auto: !choices[cur], leads: pair.map(L => ({ id: L.id, text: L.text, rt: L.rt, res: L.res, go: L.go })), chosen: chosen && chosen.id });
+    path.push({ at: cur, sum, thr, scored, evidence: scored.length, auto: !choices[cur], leads: pair.map(L => ({ id: L.id, text: L.text, rt: L.rt, res: L.res, go: L.go })), chosen: chosen && chosen.id });
     if (!chosen) return { path, stop: 'choose', at: cur };
     if (chosen.res) return { path, result: chosen.res, page: chosen.pg };
     if (chosen.go && /^[a-z]'?$/.test(chosen.go)) { cur = chosen.go.replace(/'$/, ''); continue; }
@@ -395,4 +396,118 @@ export function ecsLookup(lat, lon, ecs) {
   let best = null;
   for (const f of ecs.features) { if (!inBox(f, 0.05)) continue; const d = nearestKm(x, y, f.polys.flat(), kx, ky, 0.05); if (d < 3 && (!best || d < best.d)) best = { f, d }; }
   return best ? { ...strip(best.f), ...edges(), offMapKm: best.d } : { outside: true };
+}
+
+// ---------- DNR keying order: system group (Key 1) -> system key panel -> class key ----------
+// Key 1 picks the panel (A upland forest & woodland, B wetland forest, C upland open, D wetland open). In a panel each
+// column is one ecological system: indicator plants (judged on presence AND abundance) plus landform, soil and field
+// statements. The guide says to compare the lists and pick the system that best applies; the app scores both and
+// leaves the final choice to the user.
+export const SYS_W = { indBase: 0.6, indPerCover: 0.2, stmtFit: 1.5, stmtNot: -1.5 };
+export function groupLetter(upland, wooded) {
+  if (!upland || !wooded) return null;
+  return upland === 'upland' ? (wooded === 'wooded' ? 'A' : 'C') : (wooded === 'wooded' ? 'B' : 'D');
+}
+export function systemPanel(section, letter, data) {
+  return letter ? (data.systemKeys[section] || []).find(p => p.id.endsWith('-' + letter)) || null : null;
+}
+export const STMT_KINDS = ['landform', 'soil', 'field', 'other'];
+// statements are identified by panel + text, so a statement printed under two systems is answered once and counts for both
+export const stmtId = (panelId, kind, text) => `${panelId}|${kind}|${String(text).toLowerCase().replace(/[^a-z0-9>< ]+/g, ' ').replace(/\s+/g, ' ').trim()}`;
+export function scoreSystems(plot, panel, ticks = {}, W = SYS_W) {
+  if (!panel) return [];
+  const idx = plotIndex(plot);
+  return panel.cols.map(col => {
+    const ind = col.ind.map(s => {
+      const present = keySpeciesPresent(s, idx);
+      const cover = present ? Math.max(...s.k.map(k => idx.cover.get(k) || 0)) : 0;
+      return { c: s.c, s: s.s, l: s.l, q: s.q, present, cover };
+    });
+    const indW = ind.filter(x => x.present).reduce((a, x) => a + W.indBase + W.indPerCover * (x.cover || 1), 0);
+    const indScore = col.ind.length ? 10 * indW / Math.max(3, col.ind.length) : 0;
+    let fit = 0, not = 0;
+    for (const kind of STMT_KINDS) (col[kind] || []).forEach((_, i) => {
+      const t = ticks[stmtId(panel.id, kind, (col[kind] || [])[i])];
+      if (t === 'y') fit++; else if (t === 'n') not++;
+    });
+    const score = indScore + W.stmtFit * fit + W.stmtNot * not;
+    return { system: col.system, col, ind, nPresent: ind.filter(x => x.present).length, indScore, fit, not, score };
+  }).sort((a, b) => b.score - a.score);
+}
+// the class key that belongs to a system column (some columns only name a fact sheet; find the key that reaches it)
+export function columnKey(section, col, data) {
+  const keys = data.classKeys[section] || {};
+  if (col.classkey && keys[col.classkey]) return col.classkey;
+  const want = (col.classes || []).map(c => c.slice(0, 5));
+  return Object.keys(keys).find(id => keys[id].leads.some(L => L.res && want.includes(L.res.slice(0, 5)))) || null;
+}
+// classes a system can end in: its column's classes plus every result of its class key
+export function systemClasses(section, col, data) {
+  const kid = columnKey(section, col, data), out = new Set((col.classes || []).map(c => c.slice(0, 5)));
+  if (kid) for (const L of data.classKeys[section][kid].leads) if (L.res) out.add(L.res.slice(0, 5));
+  return [...out];
+}
+
+// ---------- supporting evidence for the system step: Appendices B-E ("Plants Useful for Differentiating ... Ecological Systems") ----------
+// Each appendix row gives a species' frequency (%) and average cover class (1 = 6-25%, 2 = 26-50%, 3 = >50%) in each system of a
+// province. A Bernoulli naive Bayes over those rows gives a system probability that does not depend on the short indicator lists of
+// the key panels. Frequencies under 5% are not printed, so a blank counts as 2.5%.
+export const APP_W = { floor: 0.025, ceil: 0.97, absWeight: 0.3, coverW: 0.35, temperature: 1.5, indW: 0.4, stmtW: 1.2 };
+export const sysCode = col => {           // 'Forested Rich Peatland' column -> 'FP' (from the classes it names)
+  const c = {}; for (const x of col.classes || []) { const k = x.slice(0, 2); c[k] = (c[k] || 0) + 1; }
+  return Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+};
+// appendix that fits a panel best (most of its systems covered); null when none covers 2+ of them
+export function appendixFor(section, codes, data) {
+  let best = null, bestN = 1;
+  for (const p of data.sysProfiles || []) {
+    if (!p.sections.includes(section)) continue;
+    const n = codes.filter(c => p.systems.includes(c)).length;
+    if (n > bestN) { best = p; bestN = n; }
+  }
+  return best;
+}
+const plotCover = r => !r ? 0 : r <= 2 ? 0 : r - 2;   // plot ranks 1-2 (<10%) -> 0, 3 (10-25) -> 1, 4 -> 2, 5 -> 3
+export function appendixLik(plot, prof, codes, W = APP_W, comp = 1) {
+  const idx = plotIndex(plot), sets = { C: [idx.byLayer.C], U: [idx.byLayer.S, idx.byLayer.H, idx.byLayer.G], A: [idx.any] };
+  const ll = Object.fromEntries(codes.map(c => [c, 0])), hits = Object.fromEntries(codes.map(c => [c, []]));
+  const aw = W.absWeight * comp;
+  for (const r of prof.rows) {
+    const ks = r.k.split('|'), present = (sets[r.l] || sets.A).some(set => ks.some(k => set.has(k)));
+    const pc = present ? plotCover(Math.max(...ks.map(k => idx.cover.get(k) || 0))) : 0;
+    for (const c of codes) {
+      if (!prof.systems.includes(c)) continue;
+      const p = Math.min(W.ceil, Math.max(W.floor, (r.f[c] || 0) / 100));
+      if (present) {
+        ll[c] += Math.log(p) - (pc ? W.coverW * Math.abs(pc - (r.cv?.[c] || 0)) : 0);
+        if (r.f[c]) hits[c].push({ c: r.c, f: r.f[c], cv: r.cv?.[c] || 0 });
+      } else ll[c] += aw * Math.log(1 - p);
+    }
+  }
+  return { ll, hits };
+}
+const softmax = o => { const m = Math.max(...Object.values(o)); const e = Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Math.exp(v - m)])); const z = Object.values(e).reduce((a, b) => a + b, 0); return Object.fromEntries(Object.entries(e).map(([k, v]) => [k, v / z])); };
+// system probabilities for a key panel: appendix likelihood + the panel's indicator plants + the statements ticked on site
+export function systemProbs(plot, panel, data, ticks = {}, W = APP_W, comp = null) {
+  if (!panel) return null;
+  const scored = scoreSystems(plot, panel, ticks);
+  const codes = scored.map(x => sysCode(x.col));
+  const prof = appendixFor(plot.section, codes, data);
+  comp ??= completeness(plot, plot.listMode || 'auto');
+  const app = prof && (plot.species || []).length ? appendixLik(plot, prof, codes, W, comp) : null;
+  const covered = app ? codes.filter(c => prof.systems.includes(c)) : [];
+  const meanLL = covered.length ? covered.reduce((a, c) => a + app.ll[c], 0) / covered.length : 0;
+  const appLogit = {}, logit = {};
+  scored.forEach((x, i) => {
+    const c = codes[i];
+    appLogit[x.system] = app ? (covered.includes(c) ? app.ll[c] : meanLL) / W.temperature : 0;
+    logit[x.system] = appLogit[x.system] + W.indW * x.indScore + W.stmtW * (x.fit - x.not);
+  });
+  const pApp = app ? softmax(appLogit) : null, p = softmax(logit);
+  for (const [i, x] of scored.entries()) {
+    x.code = codes[i]; x.p = p[x.system]; x.pApp = pApp ? pApp[x.system] : null;
+    x.appCovered = covered.includes(codes[i]); x.appHits = app ? app.hits[codes[i]] || [] : [];
+  }
+  scored.sort((a, b) => b.p - a.p);
+  return { scored, appendix: prof, covered };
 }
