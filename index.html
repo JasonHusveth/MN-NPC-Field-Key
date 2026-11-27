@@ -60,7 +60,7 @@ button.btn.danger { background: transparent; border-color: var(--bad); color: va
 .cov button { flex: 1; font: inherit; font-size: 12px; padding: 7px 2px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
 .cov button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .x { background: none; border: 0; color: var(--quiet); font-size: 20px; padding: 0 6px; }
-.rank { display: grid; grid-template-columns: 62px 1fr 56px; gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.rank { display: grid; grid-template-columns: 72px 1fr 56px; gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .rank:last-child { border-bottom: 0; }
 .rank .code { font-weight: 700; } .rank .pct { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .bar { grid-column: 2 / 3; height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; }
@@ -87,6 +87,8 @@ dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); 
 #palette details { margin-top: 8px; }
 details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 4px; }
 details .desc { color: var(--ink); margin: 6px 0; }
+/* system colour chips: pastel fills keep dark ink in both themes */
+.chip { display: inline-block; padding: 1px 7px; border-radius: 6px; background: var(--c, var(--soft)); color: #1d2a1f; font-weight: 700; font-size: 0.95em; line-height: 1.35; }
 table.kt { border-collapse: collapse; font-size: 13px; margin-top: 6px; width: 100%; }
 table.kt th, table.kt td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 table.kt th:not(:first-child), table.kt td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
