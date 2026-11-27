@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.15.0';
+export const ENGINE_VERSION = '0.15.2';
 
 // ---------- species keys ----------
 export function binom(name) {
@@ -510,4 +510,25 @@ export function systemProbs(plot, panel, data, ticks = {}, W = APP_W, comp = nul
   }
   scored.sort((a, b) => b.p - a.p);
   return { scored, appendix: prof, covered };
+}
+
+// ---------- structure rule from the DNR keys: prairie vs savanna (e.g. MIM-C5) ----------
+// Prairie: trees >2 m (bur oak, pin oak) rare or absent, cover <10%. Savanna: trees >2 m scattered, total cover >10%.
+// Tree cover = the canopy and subcanopy layers: the layer totals when entered, else the sum of species covers (class midpoints).
+export const STRUCT_W = { penalty: -2.3, low: 7.5, high: 12.5 };
+const MID = [0, 2.5, 7.5, 17.5, 37.5, 75];
+export const SAVANNA = ['UPn13', 'UPn24', 'UPs14', 'UPs24'], PRAIRIE = ['UPn12', 'UPn23', 'UPs13', 'UPs23'];
+export function treeCover(plot) {
+  const lc = plot.layerCover || {};
+  if (+lc.C || +lc.S) return Math.min(100, MID[+lc.C || 0] + MID[+lc.S || 0]);
+  return Math.min(100, (plot.species || []).filter(s => s.layer === 'C' || s.layer === 'S').reduce((a, s) => a + MID[+s.cover || 1], 0));
+}
+export function structureAdjust(codes, plot, W = STRUCT_W) {
+  const tc = treeCover(plot), out = {};
+  const f = tc <= W.low ? 1 : tc >= W.high ? -1 : 0;   // 1: clearly prairie-like, -1: clearly savanna-like, 0: borderline
+  for (const c of codes) {
+    if (SAVANNA.includes(c)) out[c] = f === 1 ? W.penalty : f === 0 ? W.penalty / 2 : 0;
+    if (PRAIRIE.includes(c)) out[c] = f === -1 ? W.penalty : 0;
+  }
+  return { tc, adj: out };
 }

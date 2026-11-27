@@ -1,4 +1,4 @@
-import { plotIndex, keySpeciesPresent, rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
+import { plotIndex, keySpeciesPresent, rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, structureAdjust, SAVANNA, PRAIRIE, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
 
 // ---------------------------------------------------------------- storage (IndexedDB, saved on every change)
 const DB = 'npc-field-key', STORE = 'kv';
@@ -57,7 +57,40 @@ function render() {
   renderTabs();
   const m = $('#main');
   m.innerHTML = S.tab === 'site' ? siteTab() : S.tab === 'land' ? landTab() : S.tab === 'system' ? systemTab() : S.tab === 'results' ? resultsTab() : S.tab === 'saved' ? savedTab() : layerTab(S.tab);
+  italicizeSci(m);
   if (LAYERS.some(([l]) => l === S.tab)) { const q = $('#q'); if (q && lastQuery.layer === S.tab) { q.value = lastQuery.text; showMatches(); } }
+}
+// ---------- scientific names in italics everywhere (DNR text, statements, species lists) ----------
+// Genus + epithet (and infraspecific epithet after var./subsp./ssp./f.), "Genus spp.", abbreviated "A. epithet", and genus names alone.
+// Only genera and epithets that occur in MNTaxa (plus the guides' moss and lichen genera) are matched; ranks and "spp." stay roman.
+let SCI_RE = null;
+function sciRegex() {
+  if (SCI_RE) return SCI_RE;
+  const gen = new Set(['Sphagnum', 'Polytrichum', 'Pleurozium', 'Dicranum', 'Hylocomium', 'Ptilium', 'Aulacomnium', 'Calliergon', 'Drepanocladus', 'Tomentypnum',
+    'Campylium', 'Scorpidium', 'Bryum', 'Aneura', 'Anomodon', 'Thuidium', 'Climacium', 'Brachythecium', 'Rhytidiadelphus', 'Cladonia', 'Cladina', 'Peltigera', 'Usnea']);
+  const ep = new Set();
+  for (const x of D.species) { const w = x.n.split(' '); if (/^[A-Z][a-z-]+$/.test(w[0])) gen.add(w[0]); for (const t of w.slice(1)) if (/^[a-z][a-z-]{2,}$/.test(t) && !['var', 'subsp', 'ssp'].includes(t)) ep.add(t); }
+  const G = [...gen].sort((a, b) => b.length - a.length).join('|'), E = [...ep].sort((a, b) => b.length - a.length).join('|');
+  SCI_RE = new RegExp(`\\b(?:(${G})(?:\\s+(?:×\\s*|x\\s+)?(${E})\\b(?:\\s+(var\\.|subsp\\.|ssp\\.|f\\.)\\s+(${E})\\b)?)?|([A-Z])\\.\\s?(${E})\\b)`, 'g');
+  return SCI_RE;
+}
+function italicizeSci(root) {
+  const re = sciRegex(), skip = new Set(['I', 'EM', 'SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION', 'CODE']);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: n => {
+    for (let e = n.parentElement; e && e !== root; e = e.parentElement) if (skip.has(e.tagName) || e.classList.contains('chip')) return NodeFilter.FILTER_REJECT;
+    re.lastIndex = 0; return re.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; } });
+  const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const n of nodes) {
+    const t = n.nodeValue, frag = document.createDocumentFragment(); let last = 0; re.lastIndex = 0;
+    for (const m of t.matchAll(re)) {
+      if (m[5] && !/[A-Z][a-z]+ /.test(t.slice(0, m.index))) continue;     // "A. epithet" only after a genus has been named
+      frag.append(t.slice(last, m.index));
+      if (m[3]) { const i1 = document.createElement('i'); i1.textContent = m[0].slice(0, m[0].lastIndexOf(m[3])).trimEnd(); const i2 = document.createElement('i'); i2.textContent = m[4]; frag.append(i1, ` ${m[3]} `, i2); }
+      else { const i = document.createElement('i'); i.textContent = m[0]; frag.append(i); }
+      last = m.index + m[0].length;
+    }
+    frag.append(t.slice(last)); n.replaceWith(frag);
+  }
 }
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (!b) return; S.tab = b.dataset.tab; save(); render(); window.scrollTo(0, 0); });
 
@@ -135,6 +168,7 @@ function classStatus(code, ctx) {
 function rankPlot(p, codes, ctx = locCtx()) {
   const pri = classPriors(codes, ctx);
   for (const [c, v] of Object.entries(mineroAdjust(codes, minerotrophic(p, D)))) pri[c] = (pri[c] || 0) + v;
+  for (const [c, v] of Object.entries(structureAdjust(codes, p).adj)) pri[c] = (pri[c] || 0) + v;
   return rankClasses(p, D, codes, { ...PARAMS, absWeight: PARAMS.absWeight * completeness(p, p.listMode || 'auto') }, pri);
 }
 // Jason's field interpretation notes (expert/notes.json): shown when their conditions hold; never change the scoring
@@ -341,6 +375,7 @@ function showMatches() {
   if (!q.trim()) { $('#matches').innerHTML = suggestionsHtml(S.tab); return; }
   const m = matches(q);
   $('#matches').innerHTML = m.length ? `<div class="results">${m.map(s => `<div data-add="${esc(s.n)}"><b>${esc(s.c || s.n)}</b> <i>${esc(s.n)}${s.ns && s.ns !== 'N' ? ' · non-native' : ''}</i></div>`).join('')}</div>` : (q ? '<p class="muted">No match in MNTaxa 2026.</p>' : '');
+  italicizeSci($('#matches'));
 }
 $('#main').addEventListener('keyup', e => { if (e.target.id === 'q') showMatches(); });
 $('#main').addEventListener('input', e => { if (e.target.id === 'q' && !e.target.value) showMatches(); });
@@ -500,6 +535,9 @@ function resultsTab() {
       <div class="why">${r.hits.length ? 'Found: ' + feats(r.hits, 6) : ''}${r.misses.length ? `<br>Expected, not recorded: ${feats(r.misses, 5)}` : ''}</div></div>`).join('')}
     ${(() => { const m = minerotrophic(p, D); const peat = ranked.slice(0, 8).some(r => /^(AP|FP|OP)/.test(r.code));
       return peat ? `<p class="muted"><b>Minerotrophic indicators:</b> ${m.n} of ${m.total} species are not on the DNR bog-species list${m.n ? ` (${m.species.slice(0, 8).map(k => esc(keyName(k)?.c || k)).join(', ')}${m.n > 8 ? '…' : ''})` : ''}. Bogs (APn80, APn90) are marked down for more than ${1} and the poor conifer swamp (APn81) for more than 4.</p>` : ''; })()}
+    ${(() => { if (!ranked.slice(0, 8).some(r => SAVANNA.includes(r.code) || PRAIRIE.includes(r.code))) return '';
+      const { tc } = structureAdjust([], p);
+      return `<p class="muted"><b>Tree cover (trees >2 m, canopy + subcanopy):</b> about ${Math.round(tc)}%${+(p.layerCover?.C || 0) || +(p.layerCover?.S || 0) ? ' from your layer totals' : ' from the species covers (enter layer totals on the Canopy and Subcanopy tabs for a better estimate)'}. DNR key: prairies have trees <10% cover, savannas >10%, so ${tc <= 7.5 ? 'savannas are marked down' : tc >= 12.5 ? 'prairies are marked down' : 'this is borderline; savannas are marked down by half'}. Oak grubs in the shrub layer don't count as trees.</p>`; })()}
     <div class="row" style="align-items:center"><label style="margin:0">Species list</label><div class="seg" data-listmode>${[['auto', 'Auto'], ['partial', 'Partial'], ['complete', 'Complete relevé']].map(([v, t]) => `<button data-lm="${v}" class="${(p.listMode || 'auto') === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>
     <p class="muted">Missing species count ${Math.round(completeness(p, p.listMode || 'auto') * 100)}% as much as in a complete relevé (Auto scales with the number of species entered, full weight at 25).</p>
     ${outside.length ? `<details><summary>Classes outside this system that also score well (${outside.map(r => esc(r.code)).join(', ')})</summary>${outside.map(r => `<div class="pal">${chip(r.code)} ${name(r.code)} <span class="muted">· ${pct(r.prob)}% overall (its system's probability × its share within the system)</span></div>`).join('')}<p class="muted">If one of these fits better, revisit Key 1 or the System tab.</p></details>` : ''}
