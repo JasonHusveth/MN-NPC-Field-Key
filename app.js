@@ -1,4 +1,4 @@
-import { plotIndex, keySpeciesPresent, rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, structureAdjust, SAVANNA, PRAIRIE, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
+import { plotIndex, keySpeciesPresent, rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, structureAdjust, structureAdjust2, SAVANNA, PRAIRIE, autoTicks, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
 
 // ---------------------------------------------------------------- storage (IndexedDB, saved on every change)
 const DB = 'npc-field-key', STORE = 'kv';
@@ -169,6 +169,7 @@ function rankPlot(p, codes, ctx = locCtx()) {
   const pri = classPriors(codes, ctx);
   for (const [c, v] of Object.entries(mineroAdjust(codes, minerotrophic(p, D)))) pri[c] = (pri[c] || 0) + v;
   for (const [c, v] of Object.entries(structureAdjust(codes, p).adj)) pri[c] = (pri[c] || 0) + v;
+  for (const [c, v] of Object.entries(structureAdjust2(codes, p))) pri[c] = (pri[c] || 0) + v;
   return rankClasses(p, D, codes, { ...PARAMS, absWeight: PARAMS.absWeight * completeness(p, p.listMode || 'auto') }, pri);
 }
 // Jason's field interpretation notes (expert/notes.json): shown when their conditions hold; never change the scoring
@@ -258,7 +259,8 @@ function landTab() {
     <p class="muted">DNR: upland soils are saturated only briefly in spring or after heavy rain and very rarely have standing water. Wetlands have persistently saturated soils, standing water through the growing season or for long periods, or annual flooding. If unsure, work through the likely choices on the System tab.</p>
     ${L1 ? `<p><span class="badge good">System group ${L1}</span> ${esc(systemPanel(S.plot.section, L1, D)?.title || '')}${S.plot.section ? '' : ' (choose the section on the Site tab)'}</p>` : '<p><span class="badge warn">Answer both</span> to choose the DNR system key.</p>'}</div>
     ${paletteCard()}
-    <div class="card"><h2>Landscape & soils <span class="muted">recorded with the plot; the DNR's own soil, landform and field statements are judged on the System tab</span></h2>
+    <div class="card"><h2>Landscape & soils <span class="muted">texture, drainage, organic depth, pH and water depth pre-answer the DNR soil statements on the System tab (you can override them there)</span></h2>
+    <p class="muted">Organic depth separates the systems the way the DNR does: Wet Forest has muck or shallow peat (&lt;16 in) over grey mineral soil; Forested and Open Rich Peatlands have peat often &gt;15 in with recognizable remains; Acid Peatlands have Sphagnum peat often &gt;36–40 in. Choose Muck or Peat under texture for the surface material. pH is optional.</p>
     ${sel('land.landform', 'Landform', ['Moraine / till plain', 'Outwash / sand plain', 'Lake plain', 'Floodplain / terrace', 'Stream valley / ravine', 'Bluff / steep slope', 'Bedrock outcrop / cliff', 'Talus', 'Lakeshore / beach', 'Peatland (basin)', 'Peatland (water track)', 'Depression / basin', 'Seepage slope', 'Dune / beach ridge'])}
     <div class="row"><div>${field('land.slope', 'Slope (%)', 'inputmode="decimal"')}</div><div>${sel('land.aspect', 'Aspect', ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'Level'])}</div></div>
     ${sel('land.flooding', 'Flooding', ['None', 'Occasional', 'Annual / frequent', 'Seasonally saturated', 'Permanently saturated', 'Standing water'])}
@@ -410,7 +412,10 @@ function sysState(p = S.plot) {
   const letter = groupLetter(p.land.upland, p.land.wooded);
   const panel = p.section ? systemPanel(p.section, letter, D) : null;
   // system probability = DNR indicator plants + site statements (the key panel) + the guide's appendix table of system frequencies
-  const sp = panel ? systemProbs(p, panel, D, p.sysTicks) : null;
+  // your ✓/✗ answers override the ones pre-filled from the soil entries on the Key 1 tab
+  const auto = autoTicks(p, panel), ticks = { ...auto.ticks };
+  for (const [k, v] of Object.entries(p.sysTicks || {})) if (v) ticks[k] = v;
+  const sp = panel ? systemProbs(p, panel, D, ticks) : null;
   const scored = sp ? sp.scored : [];
   // class-table support (share of the whole-section probability ranking held by each system's classes): shown for comparison only
   const rk = panel && p.species.length >= 3 ? rankPlot(p, candidatesFor(p.section, D)) : [];
@@ -420,7 +425,7 @@ function sysState(p = S.plot) {
   const freqDisagree = freqTop && freqTop !== scored[0] && freqTop.support >= 0.6 ? freqTop : null;
   const noInd = scored.length && scored.every(x => x.indScore === 0 && !x.appHits.length);
   const chosen = panel && p.system && p.system.letter === letter ? scored.find(x => x.system === p.system.name) : null;
-  return { letter, panel, scored, appendix: sp?.appendix || null, chosen, close, noInd, freqDisagree, best: scored[0] || null, current: chosen || scored[0] || null };
+  return { letter, panel, auto, ticks, scored, appendix: sp?.appendix || null, chosen, close, noInd, freqDisagree, best: scored[0] || null, current: chosen || scored[0] || null };
 }
 // class weights when the systems are weighed first (DNR order): P(class) = P(system) x P(class | system).
 // Once a system is chosen it gets all the weight. Before 3 species, P(class | system) comes from the distribution maps only.
@@ -458,7 +463,7 @@ function systemTab() {
         ${sup !== null ? `<span class="muted">Class tables</span><span class="muted">${pct(sup)}% of the class ranking (for comparison; not added in)</span>` : ''}</div>
       ${x.ind.length ? `<h3>Indicator plants <span class="muted">abundance counts as well as presence</span></h3><div>${x.ind.map(i => `<span class="badge ${i.present ? 'good' : ''}" style="margin:2px">${i.present ? '✓ ' : ''}${esc(i.c)}${i.l ? ` (${esc(i.l)})` : ''}${i.q ? ` ${esc(i.q)}` : ''}${i.present && i.cover ? ` · ${COVER[i.cover - 1]}` : ''}</span>`).join('')}</div>` : ''}
       ${stmts.length ? `<h3>Landform, soils & field characteristics <span class="muted">tap ✓ fits / ✗ doesn't fit</span></h3>
-        ${stmts.map(m => { const v = p.sysTicks[m.id] || ''; return `<div class="sp" style="grid-template-columns:1fr auto"><div class="nm" style="font-size:14px"><span class="muted">${m.kind}:</span> ${esc(m.t)}</div>
+        ${stmts.map(m => { const own = p.sysTicks[m.id] || '', v = own || st.auto.ticks[m.id] || '', fromSoil = !own && st.auto.ticks[m.id]; return `<div class="sp" style="grid-template-columns:1fr auto"><div class="nm" style="font-size:14px"><span class="muted">${m.kind}:</span> ${esc(m.t)}${fromSoil ? ` <span class="badge">from your entry: ${esc(st.auto.why[m.id])}</span>` : ''}</div>
           <div class="seg"><button data-tick="${m.id}§§y" class="${v === 'y' ? 'on' : ''}">✓</button><button data-tick="${m.id}§§n" class="${v === 'n' ? 'on' : ''}">✗</button></div></div>`; }).join('')}` : ''}
       <p style="margin-top:10px">${isChosen ? `<button class="btn ghost" data-usesys="">Undo choice</button>` : `<button class="btn" data-usesys="${esc(x.system)}">Use ${esc(x.system)}</button>`}
         <span class="muted">→ ${esc(columnKey(sec, x.col, D) || (x.col.goto || ''))}</span></p></div>`;
@@ -547,7 +552,9 @@ function resultsTab() {
     ${run.path.map(st => `<div class="step chosen"><b>Couplet ${esc(st.at)}</b> · score ${st.sum}${st.scored.length ? ` (${st.scored.map(x => `${esc(x.c)} ${x.v > 0 ? '+' : ''}${x.v}`).join(', ')})` : ''}<br>
        ${st.chosen ? `→ ${esc(st.chosen)}: ${esc(st.leads.find(l => l.id === st.chosen)?.text || '')} ${p.keyChoices[id]?.[st.at] ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" data-unchoose="${id}§${st.at}">undo</button>` : ''}` : ''}
        ${st.chosen && st.auto && st.evidence > 0 && st.leads.length > 1 && Math.abs(st.sum - st.thr) <= 2 ? `<div><span class="badge warn">Close call (score ${st.sum}, threshold ${st.thr})</span> DNR: when the sum is near zero, follow the other path too and read the couplet text. ${st.leads.filter(l => l.id !== st.chosen).map(l => `<button class="btn ghost" style="padding:2px 8px;font-size:12px" data-flip="${id}§${st.at}§${l.id}">Try ${esc(l.id)}${l.res ? ' → ' + esc(l.res) : ''}</button>`).join(' ')}</div>` : ''}
-       ${st.chosen && st.auto && st.evidence === 0 && st.leads.length > 1 ? `<div><span class="badge warn">No key species recorded at this couplet</span> The book's rule defaults to ${esc(st.chosen)}. Confirm by description:</div>
+       ${st.chosen && st.auto && st.autoWhy ? `<div><span class="badge good">Decided from your entries</span> This couplet is not scored by species; the app followed its wording using ${esc(st.autoWhy)}. Tap the other description if it fits better:</div>
+         <div class="choice">${st.leads.filter(l => l.id !== st.chosen).map(l => `<button data-choose="${id}§${st.at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}
+       ${st.chosen && st.auto && !st.autoWhy && st.evidence === 0 && st.leads.length > 1 ? `<div><span class="badge warn">No key species recorded at this couplet</span> The book's rule defaults to ${esc(st.chosen)}. Confirm by description:</div>
          <div class="choice">${st.leads.map(l => `<button data-choose="${id}§${st.at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}${coupletSpecies(st, pidx)}</div>`).join('')}
     ${run.stop === 'choose' ? `<p><b>This couplet is not scored; choose the description that fits:</b></p><div class="choice">${run.path.at(-1).leads.map(l => `<button data-choose="${id}§${run.path.at(-1).at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}
     ${run.result ? `<p class="verdict">→ ${chip(run.result)} ${name(run.result.slice(0, 5))} <span class="muted">p. ${run.page ?? ''}</span></p>` : ''}

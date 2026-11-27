@@ -18,6 +18,8 @@ A mobile web app (PWA) for keying Minnesota native plant communities in the fiel
    You choose the system.
 5. **Class**: runs the chosen system's class key, which is the verdict. Class probabilities within that system (from the DNR frequency tables and distribution maps) are shown beside it as support. Classes from the other systems are weighed as the system probability times the class's share within that system. The fact-sheet similar-class indicator tables are shown for checking. Then come types, subtypes and FQI.
 
+Landscape and soil entries on the Key 1 tab do work: texture, drainage, organic depth, pH and water depth pre-answer the DNR soil statements on the System tab (you can override each one). Texture, landform, slope and aspect are also checked against each type's landscape and soil description. Couplets that the DNR decides by structure or substrate rather than species are answered from your entries when they are clear: prairie vs savanna (tree cover), cattail vs bulrush marsh, open vs shrubby rock outcrop, and lakeshore and river-shore substrate.
+
 The "Possible NPCs here" card and the 20-species lists use the same system probabilities, or only the chosen system's classes once you choose one.
 
 Data entered stays on the device until **Reset plot** is pressed.

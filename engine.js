@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.15.2';
+export const ENGINE_VERSION = '0.16.1';
 
 // ---------- species keys ----------
 export function binom(name) {
@@ -123,15 +123,16 @@ export function runClassKey(plot, key, startLead = 'a', choices = {}) {
       const present = keySpeciesPresent(s, idx);
       if (present && typeof s.v === 'number') { sum += s.v; scored.push({ lead: L.id, c: s.c, s: s.s, v: s.v }); }
     }
-    let chosen = null;
+    let chosen = null, autoWhy = null;
     const thr = pair.map(L => L.val).find(v => typeof v === 'number') ?? 0;
     if (choices[cur]) chosen = byId[choices[cur]];
     else {
       const ruled = pair.filter(L => L.op && L.val !== null && L.val !== undefined);
       if (ruled.length) chosen = ruled.find(L => OPS[L.op](sum, L.val)) || null;
       else if (pair.length === 1) chosen = pair[0];
+      else { const al = autoLead(plot, pair); if (al) { chosen = byId[al.id]; autoWhy = al.why; } }
     }
-    path.push({ at: cur, sum, thr, scored, evidence: scored.length, auto: !choices[cur], leads: pair.map(L => ({ id: L.id, text: L.text, rt: L.rt, res: L.res, go: L.go, sp: L.sp || [] })), chosen: chosen && chosen.id });
+    path.push({ at: cur, sum, thr, autoWhy, scored, evidence: scored.length, auto: !choices[cur], leads: pair.map(L => ({ id: L.id, text: L.text, rt: L.rt, res: L.res, go: L.go, sp: L.sp || [] })), chosen: chosen && chosen.id });
     if (!chosen) return { path, stop: 'choose', at: cur };
     if (chosen.res) return { path, result: chosen.res, page: chosen.pg };
     if (chosen.go && /^[a-z]'?$/.test(chosen.go)) { cur = chosen.go.replace(/'$/, ''); continue; }
@@ -270,6 +271,8 @@ export function rankUnits(plot, units, section, W = TYPE_W, ctx = null) {
       const t = coverTest(rank, c.op, c.pct); if (!t) continue;
       const v = t > 0 ? W.coverYes : W.coverNo; s += v; ev.push({ v, t: c.text });
     }
+    // landscape and soil statements of the type, checked against the Key 1 entries (texture, landform, slope, aspect)
+    for (const f of siteFit(plot, u.site || [])) { s += f.v; ev.push(f); }
     return { code: u.code, name: u.name, score: s, ev };
   });
   if (!out.length) return [];
@@ -531,4 +534,165 @@ export function structureAdjust(codes, plot, W = STRUCT_W) {
     if (PRAIRIE.includes(c)) out[c] = f === -1 ? W.penalty : 0;
   }
   return { tc, adj: out };
+}
+
+// ---------- soil and site entries pre-answer the DNR system-key statements ----------
+// Only statements whose wording can be checked against an entry are answered; anything uncertain is left for the user.
+const DRAIN = ['excessively', 'somewhat excessively', 'well', 'moderately well', 'somewhat poorly', 'poorly', 'very poorly'];
+const TEXT = ['Sand', 'Loamy sand', 'Sandy loam', 'Loam', 'Silt loam', 'Clay loam', 'Clay'];
+function drainSet(t) {
+  const re = /(somewhat excessively|excessively|moderately well|somewhat poorly|very poorly|poorly|well)[- ]?(?:drained)?/g, hits = [];
+  for (const m of t.matchAll(re)) hits.push({ i: DRAIN.indexOf(m[1]), s: m.index, e: m.index + m[0].length });
+  if (!hits.length) return null;
+  const set = new Set();
+  for (let k = 0; k < hits.length; k++) {
+    const a = hits[k], b = hits[k + 1];
+    if (b && /^\s*(soils?\s*)?to\s*$/.test(t.slice(a.e, b.s))) { for (let x = Math.min(a.i, b.i); x <= Math.max(a.i, b.i); x++) set.add(x); k++; }
+    else set.add(a.i);
+  }
+  return set;
+}
+const SUB_TOKENS = [['sand', /\bsands?\b(?!stone)/], ['loamy sand', /loamy sands?/], ['sandy loam', /sandy loams?/], ['loam', /(?<!sandy |silt |clay )\bloams?\b/],
+  ['silt loam', /silt loams?|\bsilty?\b/], ['clay', /\bclay(ey)?\b/], ['mud', /\bmud\b/], ['gravel', /gravel/], ['cobbles', /cobbles?/], ['boulders', /boulders?/], ['bedrock', /bedrock|talus/]];
+const TEX_TOKENS = { Sand: ['sand', 'loamy sand'], 'Loamy sand': ['loamy sand', 'sand'], 'Sandy loam': ['sandy loam'], Loam: ['loam'], 'Silt loam': ['silt loam', 'mud'],
+  'Clay loam': ['clay', 'loam', 'mud'], Clay: ['clay', 'mud'], 'Bedrock / rock': ['bedrock', 'boulders'] };
+export function autoTicks(plot, panel) {
+  const L = plot.land || {}, out = {}, why = {};
+  if (!panel) return { ticks: out, why };
+  const ph = parseFloat(L.ph), org = parseFloat(L.organic), water = parseFloat(L.water);
+  const tex = L.texture || '', ti = TEXT.indexOf(tex), mineral = ti >= 0, muck = tex === 'Muck', peat = tex === 'Peat';
+  const di = DRAIN.indexOf((L.drainage || '').toLowerCase());
+  for (const col of panel.cols) for (const kind of STMT_KINDS) for (const raw of col[kind] || []) {
+    const t = raw.toLowerCase(), id = stmtId(panel.id, kind, raw); let v = null, w = '';
+    // pH (only when measured)
+    let m;
+    if (!isNaN(ph) && (m = t.match(/ph\s*([\d.]+)\s*[-–]\s*([\d.]+)/))) { v = ph >= +m[1] && ph <= +m[2] ? 'y' : 'n'; w = `pH ${ph}`; }
+    else if (!isNaN(ph) && (m = t.match(/ph\s*([<>])\s*([\d.]+)/))) { v = (m[1] === '>' ? ph > +m[2] : ph < +m[2]) ? 'y' : 'n'; w = `pH ${ph}`; }
+    // organic soil / peat deeper than N in (Forested Rich, Open Rich and Acid Peatlands)
+    else if (/^(peat|organic soil)/.test(t) && (m = t.match(/>\s*(\d+)\s*in/))) {
+      const n = +m[1];
+      if (!isNaN(org)) { v = org >= n ? 'y' : org < n * 0.6 ? 'n' : null; w = `organic ${org} in`; }
+      else if (mineral || muck) { v = 'n'; w = `texture ${tex}`; }
+    }
+    // muck or shallow peat over mineral soil (Wet Forest)
+    else if (/over mineral soil|over rocky drift|mineral soil may be exposed/.test(t) && /muck|peat/.test(t)) {
+      if (!isNaN(org)) { v = org <= 16 ? 'y' : (/deeper|60in/.test(t) ? null : org > 30 ? 'n' : null); w = `organic ${org} in`; }
+      else if (muck) { v = 'y'; w = 'texture Muck'; }
+    }
+    // mineral or muck soil (Wet Meadow/Carr, Marsh) ; mineral soil, not muck (Wetland Prairie)
+    else if (/^mineral soil, not muck/.test(t)) { if (mineral) { v = 'y'; w = `texture ${tex}`; } else if (muck || peat) { v = 'n'; w = `texture ${tex}`; } }
+    else if (/^mineral or muck soil/.test(t)) { if (mineral || muck) { v = 'y'; w = `texture ${tex}`; } }
+    // texture classes (upland systems)
+    else if (ti >= 0 && /sandy loam or coarser|loamy or coarser|sandy loam or finer|loamy or finer|loamy to clayey/.test(t)) {
+      if (/sandy loam or coarser/.test(t)) v = ti <= 2 ? 'y' : 'n';
+      else if (/loamy or coarser/.test(t)) v = ti <= 5 ? 'y' : 'n';
+      else v = ti >= 2 ? 'y' : 'n';
+      w = `texture ${tex}`;
+    }
+    // substrate lists ("Mud, sand, gravel, cobbles, or boulders", "Bedrock.", "...loamy sands, or sand")
+    if (v === null && tex && !/peat|muck/.test(t)) {
+      const found = SUB_TOKENS.filter(([, re]) => re.test(t)).map(([k]) => k);
+      if (found.length >= 2 || /^(bedrock|horizontal or sloping bedrock|vertical or nearly vertical bedrock)/.test(t)) {
+        const mine = TEX_TOKENS[tex] || [];
+        if (mine.length) { v = mine.some(k => found.includes(k)) ? 'y' : 'n'; w = `texture ${tex}`; }
+      }
+    }
+    // drainage class statements
+    if (v === null && di >= 0 && kind === 'soil' && /drained/.test(t)) {
+      const set = drainSet(t);
+      if (set && set.size) { const d = Math.min(...[...set].map(x => Math.abs(x - di))); v = d === 0 ? 'y' : d >= 2 ? 'n' : null; w = `${L.drainage} drained`; }
+    }
+    // standing water (Marsh)
+    if (v === null && !isNaN(water) && /submerged under water|ponding surface water present throughout/.test(t)) { if (water >= 6) { v = 'y'; w = `water ${water} in`; } }
+    if (v) { out[id] = v; why[id] = w; }
+  }
+  return { ticks: out, why };
+}
+
+// ---------- DNR couplets that are decided by structure or substrate, not by species scores ----------
+// Each rule reads the couplet's own wording and answers it only when the entries are clear; otherwise the user chooses.
+const genusCover = (plot, genera, layers = null) => Math.min(100, (plot.species || []).filter(s => s.n && genera.includes(s.n.split(' ')[0]) && (!layers || layers.includes(s.layer))).reduce((a, s) => a + MID[+s.cover || 1], 0));
+export const shrubCover = plot => +plot.layerCover?.H ? MID[+plot.layerCover.H] : Math.min(100, (plot.species || []).filter(s => s.layer === 'H').reduce((a, s) => a + MID[+s.cover || 1], 0));
+const BULRUSH = ['Schoenoplectus', 'Scirpus', 'Bolboschoenus', 'Eleocharis'];
+const SUBSTRATE = { Sand: 'coarse', 'Loamy sand': 'coarse', 'Sandy loam': 'coarse', Loam: null, 'Silt loam': 'fine', 'Clay loam': 'fine', Clay: 'fine', Muck: 'fine', Peat: null, 'Bedrock / rock': 'rock' };
+export function autoLead(plot, pair) {
+  if (pair.length < 2) return null;
+  const T = pair.map(L => (L.text || '').toLowerCase()), pick = (i, why) => ({ id: pair[i].id, why });
+  // prairie vs savanna: trees >6 ft cover <10% vs >10%
+  const iRare = T.findIndex(t => /trees? >\s*6\s*ft/.test(t) && /rare or absent/.test(t)), iTree = T.findIndex((t, i) => i !== iRare && /trees? >\s*6\s*ft/.test(t) && /present/.test(t));
+  if (iRare >= 0 && iTree >= 0) { const tc = treeCover(plot), why = `tree cover (canopy + subcanopy) about ${Math.round(tc)}%`;
+    return tc <= STRUCT_W.low ? pick(iRare, why) : tc >= STRUCT_W.high ? pick(iTree, why) : null; }
+  // marsh: cattails dominant vs bulrushes or spikerushes dominant
+  const iCat = T.findIndex(t => /dominated by cattails/.test(t)), iBul = T.findIndex(t => /dominated by bulrushes or spikerushes/.test(t));
+  if (iCat >= 0 && iBul >= 0) { const c = genusCover(plot, ['Typha']), b = genusCover(plot, BULRUSH), why = `cattail cover about ${Math.round(c)}%, bulrush/spikerush cover about ${Math.round(b)}%`;
+    return c >= 10 && c >= 1.5 * b ? pick(iCat, why) : b >= 10 && b >= 1.5 * c ? pick(iBul, why) : null; }
+  // rock outcrop: shrub and tree cover sparse vs shrub-dominated
+  const iSparse = T.findIndex(t => /shrub and tree cover sparse or absent/.test(t)), iShrub = T.findIndex(t => /shrub-dominated/.test(t));
+  if (iSparse >= 0 && iShrub >= 0) { const s = shrubCover(plot) + treeCover(plot), why = `shrub + tree cover about ${Math.round(s)}%`;
+    return s <= 10 ? pick(iSparse, why) : s >= 25 ? pick(iShrub, why) : null; }
+  // lakeshore / river shore substrate: sand-gravel-cobble vs silt-clay vs bedrock-boulders
+  const kind = SUBSTRATE[plot.land?.texture || ''];
+  if (kind && T.some(t => /substrate/.test(t))) {
+    const i = T.findIndex(t => kind === 'coarse' ? /sand|gravel|cobble/.test(t) && !/silt or clay/.test(t) : kind === 'fine' ? /silt or clay/.test(t) : /bedrock|boulders/.test(t));
+    if (i >= 0) return pick(i, `substrate entered as ${plot.land.texture}`);
+  }
+  return null;
+}
+// ranking counterparts of the marsh and rock-outcrop couplets (prairie/savanna is in structureAdjust)
+export function structureAdjust2(codes, plot, W = STRUCT_W) {
+  const out = {}, c = genusCover(plot, ['Typha']), b = genusCover(plot, BULRUSH), s = shrubCover(plot) + treeCover(plot);
+  for (const code of codes) {
+    if (code === 'MRn93' && c >= 10 && c >= 1.5 * b) out[code] = W.penalty;
+    if (code === 'MRn83' && b >= 10 && b >= 1.5 * c) out[code] = W.penalty;
+    if (code === 'ROn23' && (plot.species || []).length && s <= 10) out[code] = W.penalty;
+    if (code === 'ROn12' && s >= 25) out[code] = W.penalty;
+  }
+  return out;
+}
+
+
+// ---------- type descriptions' landscape and soil statements vs the plot's entries ----------
+// Each concept (substrate, landform, slope, aspect) counts once per type: +1 when a statement fits, -1 when it contradicts.
+const CUE = {
+  sand: /\bsands?\b|sandy|aeolian|dunes?\b|wind-reworked|blowouts?/, gravel: /gravel/, outwash: /outwash/,
+  rock: /bedrock|outcrops?\b|thin soils|rock fragments|dolomite|sandstone|limestone|cliffs?\b|talus|ledges?/,
+  fine: /fine-textured|medium- to fine|loess|\btill\b|clay|silt/, organic: /\bpeat|\bmuck|organic soil/,
+  steep: /\bsteep|bluffs?\b/, level: /\blevel\b|nearly level|flat\b|gentle/, south: /south|west-facing|southwest/, north: /north-facing|northeast|north slopes/,
+  lake: /lake plain|lacustrine/, flood: /floodplain|alluvium|alluvial/,
+};
+export const SITE_W = { fit: 1.0, not: -1.0 };
+export function siteFit(plot, cues, W = SITE_W) {
+  const L = plot.land || {}, tex = L.texture || '', lf = L.landform || '', slope = parseFloat(L.slope), asp = L.aspect || '';
+  const txt = cues.join(' ').toLowerCase(), has = k => CUE[k].test(txt), out = [];
+  const add = (ok, what) => { if (ok === null) return; out.push({ v: ok ? W.fit : W.not, t: `${what} ${ok ? 'fits' : 'does not fit'} the description` }); };
+  // substrate (texture)
+  const sub = /^(Sand|Loamy sand)$/.test(tex) ? 'sand' : tex === 'Sandy loam' ? 'coarse' : /^(Loam|Silt loam|Clay loam|Clay)$/.test(tex) ? 'fine' : tex === 'Bedrock / rock' ? 'rock' : /^(Muck|Peat)$/.test(tex) ? 'organic' : '';
+  if (sub) {
+    let ok = null;
+    if (sub === 'sand') ok = has('sand') ? true : has('rock') || has('fine') || has('organic') ? false : null;   // gravelly outwash alone stays neutral
+    if (sub === 'coarse') ok = has('sand') || has('gravel') || has('outwash') ? true : has('fine') && !has('sand') ? false : null;
+    if (sub === 'fine') ok = has('fine') ? true : (has('sand') || has('gravel')) && !has('fine') ? false : null;
+    if (sub === 'rock') ok = has('rock') ? true : has('sand') || has('fine') ? false : null;
+    if (sub === 'organic') ok = has('organic') ? true : has('sand') || has('rock') ? false : null;
+    add(ok, `soil ${tex.toLowerCase()}`);
+  }
+  // landform
+  const lfk = /Outwash|sand plain/.test(lf) ? 'outwash' : /Dune/.test(lf) ? 'dune' : /Bluff|steep/.test(lf) ? 'bluff' : /Bedrock|Talus/.test(lf) ? 'rock' : /Moraine|till/.test(lf) ? 'till' : /Lake plain/.test(lf) ? 'lake' : /Floodplain/.test(lf) ? 'flood' : '';
+  if (lfk) {
+    let ok = null;
+    if (lfk === 'outwash') ok = has('outwash') || has('sand') ? true : has('rock') ? false : null;
+    if (lfk === 'dune') ok = has('sand') ? true : has('rock') || has('fine') || has('gravel') ? false : null;
+    if (lfk === 'bluff') ok = has('steep') || has('rock') ? true : has('level') && !has('steep') ? false : null;
+    if (lfk === 'rock') ok = has('rock') ? true : has('sand') && !has('rock') ? false : null;
+    if (lfk === 'till') ok = /till|moraine/.test(txt) ? true : null;
+    if (lfk === 'lake') ok = has('lake') ? true : null;
+    if (lfk === 'flood') ok = has('flood') ? true : null;
+    add(ok, `landform ${lf.toLowerCase()}`);
+  }
+  // slope
+  if (!isNaN(slope)) add(slope >= 20 ? (has('steep') ? true : has('level') ? false : null) : slope <= 3 ? (has('steep') && !has('level') ? false : has('level') ? true : null) : null, `${slope}% slope`);
+  // aspect
+  if (/^(S|SW|W)$/.test(asp)) add(has('south') ? true : has('north') ? false : null, `${asp} aspect`);
+  else if (/^(N|NE|NW)$/.test(asp)) add(has('north') ? true : has('south') ? false : null, `${asp} aspect`);
+  return out;
 }
