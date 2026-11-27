@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.14.2';
+export const ENGINE_VERSION = '0.14.5';
 
 // ---------- species keys ----------
 export function binom(name) {
