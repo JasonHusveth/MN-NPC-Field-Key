@@ -1,4 +1,4 @@
-import { rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
+import { plotIndex, keySpeciesPresent, rankClasses, rankUnits, runClassKey, runProbKey, floristicQuality, candidatesFor, keysForClass, binom, ecsLookup, distStatus, ltasNear, minerotrophic, mineroAdjust, completeness, PARAMS, groupLetter, systemPanel, scoreSystems, systemProbs, columnKey, systemClasses, stmtId, STMT_KINDS, ENGINE_VERSION } from './engine.js';
 
 // ---------------------------------------------------------------- storage (IndexedDB, saved on every change)
 const DB = 'npc-field-key', STORE = 'kv';
@@ -436,11 +436,24 @@ function systemTab() {
     ${!st.chosen && !st.noInd && !st.close && st.freqDisagree ? `<p><span class="badge warn">Check</span> The system evidence points to <b>${esc(st.best.system)}</b>, but the class tables put ${pct(st.freqDisagree.support)}% on <b>${esc(st.freqDisagree.system)}</b>. Weigh the site statements for both.</p>` : ''}
     ${st.letter === 'B' || st.letter === 'D' ? '<p class="muted">DNR note: sparsely wooded Acid Peatlands and Forested Rich Peatlands can be keyed with either the wetland forest (B) or wetland open (D) keys.</p>' : ''}</div>${cols}</section>`;
 }
+// key species list with what was recorded (layer and abundance qualifiers as printed: U = understory, C = canopy)
+const spLabel = sp => `${esc(sp.c)}${sp.l ? ` <span class="muted">(${sp.l === 'U' ? 'understory' : sp.l === 'C' ? 'canopy' : esc(sp.l)})</span>` : ''}${sp.q ? ` <span class="muted">${esc(sp.q)}</span>` : ''}`;
+function coupletSpecies(st, idx) {
+  const rows = st.leads.flatMap(l => (l.sp || []).map(sp => ({ sp, lead: l.id, rec: keySpeciesPresent(sp, idx) })));
+  if (!rows.length) return '';
+  const n = rows.filter(r => r.rec).length;
+  return `<details${n === 0 ? ' open' : ''}><summary>Key species at this couplet (${n} of ${rows.length} recorded)</summary><div style="overflow-x:auto"><table class="kt"><tr><th>Species</th><th>Points</th><th>Toward</th></tr>${rows.map(r => `<tr class="${r.rec ? 'rec' : ''}"><td>${r.rec ? '✓ ' : ''}${spLabel(r.sp)}</td><td>${r.sp.v > 0 ? '+' : ''}${r.sp.v}</td><td>${esc(r.lead)}${(st.leads.find(l => l.id === r.lead) || {}).res ? ' → ' + esc(st.leads.find(l => l.id === r.lead).res.slice(0, 6)) : ''}</td></tr>`).join('')}</table></div></details>`;
+}
+function probKeySpecies(k, idx) {
+  const rows = k.rows.map(r => ({ r, rec: keySpeciesPresent(r, idx) })).sort((a, b) => b.rec - a.rec);
+  return `<details><summary>Key species (${rows.filter(x => x.rec).length} of ${rows.length} recorded)</summary><div style="overflow-x:auto"><table class="kt"><tr><th>Species</th>${k.classes.map(c => `<th>${esc(c)}</th>`).join('')}</tr>${rows.map(({ r, rec }) => `<tr class="${rec ? 'rec' : ''}"><td>${rec ? '✓ ' : ''}${spLabel(r)}</td>${k.classes.map(c => `<td>${typeof r.v[c] === 'number' ? r.v[c] : ''}</td>`).join('')}</tr>`).join('')}</table></div><p class="muted">Points as printed in the key; ✓ rows are on your list and count toward the totals above.</p></details>`;
+}
 function resultsTab() {
   const p = S.plot;
   if (!p.section) return `<section class="tab on"><div class="card"><h2>Results</h2><p>Choose the ecological section on the Site tab first; it decides which keys and classes apply.</p></div></section>`;
   if (p.species.length < 3) return `<section class="tab on"><div class="card"><h2>Results</h2><p>Add at least a few species to score the plot.</p></div></section>`;
   const sec = D.sections.find(s => s.code === p.section);
+  const pidx = plotIndex(p);
   const ss = sysState();
   if (!ss.panel) return `<section class="tab on"><div class="card"><h2>Step 4 · Class</h2><p>Follow the DNR order first: answer Key 1 (wooded/open, upland/wetland), then choose the system on the System tab.</p></div></section>`;
   const sysCol = ss.current.col, sysName = ss.current.system, confirmed = !!ss.chosen;
@@ -491,7 +504,7 @@ function resultsTab() {
        ${st.chosen ? `→ ${esc(st.chosen)}: ${esc(st.leads.find(l => l.id === st.chosen)?.text || '')} ${p.keyChoices[id]?.[st.at] ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" data-unchoose="${id}§${st.at}">undo</button>` : ''}` : ''}
        ${st.chosen && st.auto && st.evidence > 0 && st.leads.length > 1 && Math.abs(st.sum - st.thr) <= 2 ? `<div><span class="badge warn">Close call (score ${st.sum}, threshold ${st.thr})</span> DNR: when the sum is near zero, follow the other path too and read the couplet text. ${st.leads.filter(l => l.id !== st.chosen).map(l => `<button class="btn ghost" style="padding:2px 8px;font-size:12px" data-flip="${id}§${st.at}§${l.id}">Try ${esc(l.id)}${l.res ? ' → ' + esc(l.res) : ''}</button>`).join(' ')}</div>` : ''}
        ${st.chosen && st.auto && st.evidence === 0 && st.leads.length > 1 ? `<div><span class="badge warn">No key species recorded at this couplet</span> The book's rule defaults to ${esc(st.chosen)}. Confirm by description:</div>
-         <div class="choice">${st.leads.map(l => `<button data-choose="${id}§${st.at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}</div>`).join('')}
+         <div class="choice">${st.leads.map(l => `<button data-choose="${id}§${st.at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}${coupletSpecies(st, pidx)}</div>`).join('')}
     ${run.stop === 'choose' ? `<p><b>This couplet is not scored; choose the description that fits:</b></p><div class="choice">${run.path.at(-1).leads.map(l => `<button data-choose="${id}§${run.path.at(-1).at}§${l.id}"><b>${esc(l.id)}.</b> ${esc(l.text || '')}${l.res ? ` <b>→ ${esc(l.res)}</b>` : ''}</button>`).join('')}</div>` : ''}
     ${run.result ? `<p class="verdict">→ ${esc(run.result)} ${name(run.result.slice(0, 5))} <span class="muted">p. ${run.page ?? ''}</span></p>` : ''}
     ${run.stop && run.stop !== 'choose' ? `<p class="muted">Key stopped (${esc(run.stop)} ${esc(run.target || '')}).</p>` : ''}</div>`).join('');
@@ -501,7 +514,7 @@ function resultsTab() {
   const pk = pks.map(k => { const r = runProbKey(p, k); const tot = r.ranked.reduce((a, x) => a + x[1], 0) || 1;
     return `<div class="card"><h2>DNR probability key ${esc(k.id)} <span class="muted">${k.book} p. ${k.page}</span></h2>
       ${r.ranked.map(([c, v]) => `<div class="rank"><span class="code">${c}</span><span>${name(c)}</span><span class="pct">${v} pts</span><div class="bar"><span style="width:${100 * v / tot}%"></span></div></div>`).join('')}
-      <p class="muted">${r.used.length} of the key's ${k.rows.length} species recorded. Highest score is the most probable class (the DNR reports 70–80% accuracy).</p></div>`; }).join('');
+      <p class="muted">${r.used.length} of the key's ${k.rows.length} species recorded. Highest score is the most probable class (the DNR reports 70–80% accuracy).</p>${probKeySpecies(k, pidx)}</div>`; }).join('');
   // DNR fact-sheet indicator tables for similar classes (EBF and PPATP fact sheets): shown when both classes of a pair are in contention
   const contend = [...new Set([...ranked.slice(0, 3).map(r => r.code), ...keyRes, ...outside.slice(0, 2).map(r => r.code)])];
   const idxP = new Set(p.species.map(x => binom(x.n)));

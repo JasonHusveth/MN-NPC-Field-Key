@@ -87,6 +87,10 @@ dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); 
 #palette details { margin-top: 8px; }
 details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 4px; }
 details .desc { color: var(--ink); margin: 6px 0; }
+table.kt { border-collapse: collapse; font-size: 13px; margin-top: 6px; width: 100%; }
+table.kt th, table.kt td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.kt th:not(:first-child), table.kt td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+table.kt tr.rec td { background: var(--soft); font-weight: 600; }
 </style>
 </head>
 <body>

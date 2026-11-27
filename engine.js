@@ -5,7 +5,7 @@
 //   3. the DNR probability key (wooded classes, LMF and EBF sections only)
 // plus floristic quality (mean C, FQI) from MNTaxa 2026 C values.
 
-export const ENGINE_VERSION = '0.14.1';
+export const ENGINE_VERSION = '0.14.2';
 
 // ---------- species keys ----------
 export function binom(name) {
@@ -131,7 +131,7 @@ export function runClassKey(plot, key, startLead = 'a', choices = {}) {
       if (ruled.length) chosen = ruled.find(L => OPS[L.op](sum, L.val)) || null;
       else if (pair.length === 1) chosen = pair[0];
     }
-    path.push({ at: cur, sum, thr, scored, evidence: scored.length, auto: !choices[cur], leads: pair.map(L => ({ id: L.id, text: L.text, rt: L.rt, res: L.res, go: L.go })), chosen: chosen && chosen.id });
+    path.push({ at: cur, sum, thr, scored, evidence: scored.length, auto: !choices[cur], leads: pair.map(L => ({ id: L.id, text: L.text, rt: L.rt, res: L.res, go: L.go, sp: L.sp || [] })), chosen: chosen && chosen.id });
     if (!chosen) return { path, stop: 'choose', at: cur };
     if (chosen.res) return { path, result: chosen.res, page: chosen.pg };
     if (chosen.go && /^[a-z]'?$/.test(chosen.go)) { cur = chosen.go.replace(/'$/, ''); continue; }
